@@ -35,14 +35,11 @@ define(function (require, exports, module) {
     var OldPreferenceStorage = require("preferences/PreferenceStorage").PreferenceStorage,
         FileUtils         = require("file/FileUtils"),
         ExtensionLoader   = require("utils/ExtensionLoader"),
-<<<<<<< HEAD
         CollectionUtils   = require("utils/CollectionUtils"),
         ChromeStorage = require("preferences/ChromeStorage");
-=======
         PreferencesBase   = require("preferences/PreferencesBase"),
         FileSystem        = require("filesystem/FileSystem"),
         _                 = require("thirdparty/lodash");
->>>>>>> 06240746a50ab8e2878f4bceaedb4cfcdf3c5453
     
     /**
      * The local storage ID
@@ -198,7 +195,6 @@ define(function (require, exports, module) {
     }
 
     // Use localStorage by default
-<<<<<<< HEAD
     if (module.config().persistentStorage != "chrome"){
         initStorage(localStorage);
     }
@@ -207,13 +203,8 @@ define(function (require, exports, module) {
         initStorage(ChromeStorage);
         //});
     }
+    //_initStorage(localStorage);
     
-
-=======
-    _initStorage(localStorage);
-    
-    
->>>>>>> 06240746a50ab8e2878f4bceaedb4cfcdf3c5453
     // Public API
     exports.getPreferenceStorage    = getPreferenceStorage;
     exports.savePreferences         = savePreferences;

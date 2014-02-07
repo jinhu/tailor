@@ -117,7 +117,6 @@ define(function (require, exports, module) {
          * @param {!function(string)} errorCallback
          */
         requestNativeFileSystem: function (path, successCallback, errorCallback) {
-<<<<<<< HEAD
             if (!path || !path.length || path == '/'){
                 successCallback(new NativeFileSystem.FileSystem());
                 return;
@@ -127,16 +126,14 @@ define(function (require, exports, module) {
                     successCallback(new NativeFileSystem.FileSystem(path));
                 } else if (errorCallback) {
                     errorCallback(new NativeFileError(NativeFileSystem._fsErrorToDOMErrorName(err)));
-=======
-            _warn("NativeFileSystem.requestNativeFileSystem()", "FileSystem.resolve()");
-            
-            FileSystem.resolve(path, function (err, entry) {
-                if (err) {
-                    errorCallback(err);
-                } else {
-                    var fakeNativeFileSystem = { root: entry };
-                    successCallback(fakeNativeFileSystem);
->>>>>>> 06240746a50ab8e2878f4bceaedb4cfcdf3c5453
+//             _warn("NativeFileSystem.requestNativeFileSystem()", "FileSystem.resolve()");
+//             
+//             FileSystem.resolve(path, function (err, entry) {
+//                 if (err) {
+//                     errorCallback(err);
+//                 } else {
+//                     var fakeNativeFileSystem = { root: entry };
+//                     successCallback(fakeNativeFileSystem);
                 }
             });
         },

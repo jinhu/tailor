@@ -88,14 +88,10 @@
 define(function (require, exports, module) {
     "use strict";
     
-<<<<<<< HEAD
+    var _ = require("thirdparty/lodash");
     var PlatformFileSystem    = require("file/PlatformFileSystem").PlatformFileSystem,
         DocumentModule      = require("document/Document"),
-=======
-    var _ = require("thirdparty/lodash");
     
-    var DocumentModule      = require("document/Document"),
->>>>>>> 06240746a50ab8e2878f4bceaedb4cfcdf3c5453
         ProjectManager      = require("project/ProjectManager"),
         EditorManager       = require("editor/EditorManager"),
         FileSyncManager     = require("project/FileSyncManager"),

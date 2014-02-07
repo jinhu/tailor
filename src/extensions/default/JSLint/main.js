@@ -172,7 +172,6 @@ define(function (require, exports, module) {
         return null;
     }
     
-<<<<<<< HEAD
     /** Command to toggle enablement */
     function handleToggleEnabled() {
         setEnabled(!_enabled);
@@ -229,11 +228,5 @@ define(function (require, exports, module) {
         
         toggleCollapsed(_prefs.getValue("collapsed"));
                 
-=======
-    // Register for JS files
-    CodeInspection.register("javascript", {
-        name: Strings.JSLINT_NAME,
-        scanFile: lintOneFile
->>>>>>> 06240746a50ab8e2878f4bceaedb4cfcdf3c5453
     });
 });
