@@ -1,23 +1,31 @@
 <tr>
     <td class="ext-info">
         <span class="ext-name">{{#metadata.title}}{{metadata.title}}{{/metadata.title}}{{^metadata.title}}{{metadata.name}}{{/metadata.title}}</span>
-        <span class="muted ext-version">{{metadata.version}}</span>
         {{#authorInfo}}
-            <span class="muted ext-author">
-                &mdash; {{{authorInfo}}}
-            </span>
+            <span class="muted ext-author">{{{authorInfo}}}</span>
         {{/authorInfo}}
+        <span class="muted ext-version">{{metadata.version}}</span>
         {{#hasVersionInfo}}
             <span class="muted ext-date"> &mdash; {{lastVersionDate}}</span>
         {{/hasVersionInfo}}
     </td>
     <td class="ext-desc">
-        {{^isCompatible}}
-            <div class="alert warning">
-                {{#requiresNewer}}{{Strings.EXTENSION_INCOMPATIBLE_NEWER}}{{/requiresNewer}}
-                {{^requiresNewer}}{{Strings.EXTENSION_INCOMPATIBLE_OLDER}}{{/requiresNewer}}
-            </div>
-        {{/isCompatible}}
+        {{#showInstallButton}}
+            <!-- Warnings when trying to install extension where latest/all versions not compatible -->
+            {{^isCompatible}}
+                <div class="alert warning">
+                    {{#requiresNewer}}{{Strings.EXTENSION_INCOMPATIBLE_NEWER}}{{/requiresNewer}}
+                    {{^requiresNewer}}{{Strings.EXTENSION_INCOMPATIBLE_OLDER}}{{/requiresNewer}}
+                </div>
+            {{/isCompatible}}
+            {{#isCompatible}}
+                {{^isCompatibleLatest}}
+                    <div class="alert warning">
+                        {{installWarning}}
+                    </div>
+                {{/isCompatibleLatest}}
+            {{/isCompatible}}
+        {{/showInstallButton}}
         {{metadata.description}}
         {{^metadata.description}}
             <p class="muted"><em>{{Strings.EXTENSION_NO_DESCRIPTION}}</em></p>
@@ -42,6 +50,11 @@
             </button>
         {{/showInstallButton}}
         {{#isInstalled}}
+            {{#showUpdateButton}}
+                <button class="btn btn-mini update" data-extension-id="{{metadata.name}}" {{^allowUpdate}}disabled title="{{updateNotAllowedReason}}"{{/allowUpdate}}>
+                    {{Strings.UPDATE}}
+                </button>
+            {{/showUpdateButton}}
             {{#removalAllowed}}
                 <button class="btn btn-mini remove" data-extension-id="{{metadata.name}}" {{^allowRemove}}disabled title="{{Strings.CANT_REMOVE_DEV}}"{{/allowRemove}}>
                     {{Strings.REMOVE}}
@@ -49,14 +62,14 @@
             {{/removalAllowed}}
             {{#failedToStart}}
                 {{^isMarkedForRemoval}}
-                    {{Strings.EXTENSION_ERROR}} (<a class="remove" data-extension-id="{{metadata.name}}">{{Strings.REMOVE}}</a>)
+                    {{Strings.EXTENSION_ERROR}} {{#allowRemove}}(<a class="remove" data-extension-id="{{metadata.name}}">{{Strings.REMOVE}}</a>){{/allowRemove}}
                 {{/isMarkedForRemoval}}
             {{/failedToStart}}
             {{#isMarkedForRemoval}}
-                {{Strings.MARKED_FOR_REMOVAL}} (<a class="undo-remove" data-extension-id="{{metadata.name}}">{{Strings.UNDO_REMOVE}}</a>)
+                {{Strings.MARKED_FOR_REMOVAL}} (<a class="undo-remove" data-extension-id="{{metadata.name}}" href="#">{{Strings.UNDO_REMOVE}}</a>)
             {{/isMarkedForRemoval}}
             {{#isMarkedForUpdate}}
-                {{Strings.MARKED_FOR_UPDATE}} (<a class="undo-update" data-extension-id="{{metadata.name}}">{{Strings.UNDO_UPDATE}}</a>)
+                {{Strings.MARKED_FOR_UPDATE}} (<a class="undo-update" data-extension-id="{{metadata.name}}" href="#">{{Strings.UNDO_UPDATE}}</a>)
             {{/isMarkedForUpdate}}
         {{/isInstalled}}
     </td>

@@ -77,7 +77,7 @@ define(function (require, exports, module) {
             runs(function () {
                 if (promise) {
                     if (expectInline) {
-                        expect(widget).not.toBeNull();
+                        expect(widget).toBeTruthy();
                         expect(widget.$htmlContent.find(".css-prop-summary h1").text()).toBe(expectedProperty);
                     } else {
                         expect(widget).toBeNull();
@@ -115,7 +115,7 @@ define(function (require, exports, module) {
             });
             
             afterEach(function () {
-                SpecRunnerUtils.destroyMockEditor(editor);
+                SpecRunnerUtils.destroyMockEditor(doc);
             });
             
             it("should open docs when the selection is on a CSS property", function () {
@@ -150,7 +150,7 @@ define(function (require, exports, module) {
             });
             
             afterEach(function () {
-                SpecRunnerUtils.destroyMockEditor(editor);
+                SpecRunnerUtils.destroyMockEditor(doc);
             });
             
             it("should open docs for CSS in a <style> block", function () {
@@ -195,7 +195,7 @@ define(function (require, exports, module) {
                     $a,
                     title,
                     href,
-                    $links = viewer.$htmlContent.find("a");
+                    $links = viewer.$htmlContent.find("a:not(.close)");
                 
                 // 7 links in description.html, 1 "more info" link in template
                 expect($links.length).toBe(8);

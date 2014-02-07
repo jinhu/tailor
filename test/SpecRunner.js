@@ -1,65 +1,76 @@
 /*
  * Copyright (c) 2012 Adobe Systems Incorporated. All rights reserved.
- *  
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"), 
- * to deal in the Software without restriction, including without limitation 
- * the rights to use, copy, modify, merge, publish, distribute, sublicense, 
- * and/or sell copies of the Software, and to permit persons to whom the 
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- *  
+ *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- *  
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING 
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER 
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
- * 
+ *
  */
 
 /*jslint vars: true, plusplus: true, devel: true, browser: true, nomen: true, indent: 4, maxerr: 50 */
-/*global require, define, $, beforeEach, afterEach, jasmine, brackets, PathUtils */
+/*global require, define, $, waitsForDone, beforeEach, afterEach, beforeFirst, afterLast, jasmine, brackets */
 
 // Set the baseUrl to brackets/src
 require.config({
     baseUrl: "../src",
     paths: {
-        "test"      : "../test",
-        "perf"      : "../test/perf",
-        "spec"      : "../test/spec",
-        "text"      : "thirdparty/text/text",
-        "i18n"      : "thirdparty/i18n/i18n"
+        "test"              : "../test",
+        "perf"              : "../test/perf",
+        "spec"              : "../test/spec",
+        "text"              : "thirdparty/text/text",
+        "i18n"              : "thirdparty/i18n/i18n",
+        "fileSystemImpl"    : "filesystem/impls/appshell/AppshellFileSystem"
     }
 });
 
 define(function (require, exports, module) {
     'use strict';
     
-    // Utility dependency
+    var _ = require("thirdparty/lodash");
+    
+    // Utility dependencies
     var AppInit                 = require("utils/AppInit"),
+        CodeHintManager         = require("editor/CodeHintManager"),
         Global                  = require("utils/Global"),
         SpecRunnerUtils         = require("spec/SpecRunnerUtils"),
         ExtensionLoader         = require("utils/ExtensionLoader"),
         Async                   = require("utils/Async"),
+        FileSystem              = require("filesystem/FileSystem"),
         FileUtils               = require("file/FileUtils"),
         Menus                   = require("command/Menus"),
-        NativeFileSystem        = require("file/NativeFileSystem").NativeFileSystem,
         UrlParams               = require("utils/UrlParams").UrlParams,
         UnitTestReporter        = require("test/UnitTestReporter").UnitTestReporter,
         NodeConnection          = require("utils/NodeConnection"),
+        NodeDomain              = require("utils/NodeDomain"),
         BootstrapReporterView   = require("test/BootstrapReporterView").BootstrapReporterView,
-        ColorUtils              = require("utils/ColorUtils");
+        ColorUtils              = require("utils/ColorUtils"),
+        NativeApp               = require("utils/NativeApp");
 
-    // Load modules that self-register and just need to get included in the main project
+    // Load modules that self-register and just need to get included in the test-runner window
     require("document/ChangedDocumentTracker");
     
     // TODO (#2155): These are used by extensions via brackets.getModule(), so tests that run those
     // extensions need these to be required up front. We need a better solution for this eventually.
     require("utils/ExtensionUtils");
+    
+    // Also load compatibility shims for now, in case legacy extensions are still using old file APIs
+    require("project/FileIndexManager");
+    require("file/NativeFileSystem");
+    require("file/NativeFileError");
     
     // Load both top-level suites. Filtering is applied at the top-level as a filter to BootstrapReporter.
     require("test/UnitTestSuite");
@@ -71,7 +82,6 @@ define(function (require, exports, module) {
     var selectedSuites,
         params                  = new UrlParams(),
         reporter,
-        _nodeConnectionDeferred = new $.Deferred(),
         reporterView,
         _writeResults           = new $.Deferred(),
         _writeResultsPromise    = _writeResults.promise(),
@@ -84,7 +94,7 @@ define(function (require, exports, module) {
      * for the installer in this run of Brackets.
      */
     var NODE_CONNECTION_TIMEOUT = 30000; // 30 seconds - TODO: share with StaticServer?
-
+    
     // parse URL parameters
     params.parse();
     resultsPath = params.get("resultsPath");
@@ -146,19 +156,26 @@ define(function (require, exports, module) {
 
     function writeResults(path, text) {
         // check if the file already exists
-        brackets.fs.stat(path, function (err, stat) {
-            if (err === brackets.fs.ERR_NOT_FOUND) {
-                // file not found, write the new file with xml content
-                brackets.fs.writeFile(path, text, NativeFileSystem._FSEncodings.UTF8, function (err) {
-                    if (err) {
-                        _writeResults.reject();
-                    } else {
-                        _writeResults.resolve();
-                    }
-                });
-            } else {
+        var file = FileSystem.getFileForPath(path);
+        
+        file.exists(function (err, exists) {
+            if (err) {
+                _writeResults.reject(err);
+                return;
+            }
+            
+            if (exists) {
                 // file exists, do not overwrite
                 _writeResults.reject();
+            } else {
+                // file not found, write the new file with xml content
+                FileUtils.writeText(file, text)
+                    .done(function () {
+                        _writeResults.resolve();
+                    })
+                    .fail(function (err) {
+                        _writeResults.reject(err);
+                    });
             }
         });
     }
@@ -166,7 +183,7 @@ define(function (require, exports, module) {
     /**
      * Listener for UnitTestReporter "runnerEnd" event. Attached only if
      * "resultsPath" URL parameter exists. Does not overwrite existing file.
-     * 
+     *
      * @param {!$.Event} event
      * @param {!UnitTestReporter} reporter
      */
@@ -175,11 +192,11 @@ define(function (require, exports, module) {
             writeResults(resultsPath, reporter.toJSON());
         }
 
-        _writeResults.always(function () { window.close(); });
+        _writeResults.always(function () { brackets.app.quit(); });
     }
 
     /**
-     * Patch JUnitXMLReporter to use brackets.fs and to consolidate all results
+     * Patch JUnitXMLReporter to use FileSystem and to consolidate all results
      * into a single file.
      */
     function _patchJUnitReporter() {
@@ -228,40 +245,39 @@ define(function (require, exports, module) {
         };
     }
     
-    function init() {
-        // Start up the node connection, which is held in the
-        // _nodeConnectionDeferred module variable. (Use 
-        // _nodeConnectionDeferred.done() to access it.
-        
-        // This is in SpecRunner rather than SpecRunnerUtils because the hope
-        // is to hook up jasmine-node tests in this test runner.
-        
-        // TODO: duplicates code from StaticServer
-        // TODO: can this be done lazily?
-        
-        var connectionTimeout = setTimeout(function () {
-            console.error("[SpecRunner] Timed out while trying to connect to node");
-            _nodeConnectionDeferred.reject();
-        }, NODE_CONNECTION_TIMEOUT);
-        
-        var _nodeConnection = new NodeConnection();
-        _nodeConnection.connect(true).then(function () {
-            var domainPath = FileUtils.getNativeBracketsDirectoryPath() + "/" + FileUtils.getNativeModuleDirectoryPath(module) + "/../test/node/TestingDomain";
-            
-            _nodeConnection.loadDomains(domainPath, true)
-                .then(
-                    function () {
-                        clearTimeout(connectionTimeout);
-                        _nodeConnectionDeferred.resolve(_nodeConnection);
-                    },
-                    function () { // Failed to connect
-                        console.error("[SpecRunner] Failed to connect to node", arguments);
-                        clearTimeout(connectionTimeout);
-                        _nodeConnectionDeferred.reject();
-                    }
-                );
-        });
+    function _registerBeforeAfterHandlers() {
+        // Initiailize unit test preferences for each spec
+        beforeEach(function () {
+            // Unique key for unit testing
+            localStorage.setItem("preferencesKey", SpecRunnerUtils.TEST_PREFERENCES_KEY);
 
+            // Reset preferences from previous test runs
+            localStorage.removeItem("doLoadPreferences");
+            localStorage.removeItem(SpecRunnerUtils.TEST_PREFERENCES_KEY);
+            
+            SpecRunnerUtils.runBeforeFirst();
+        });
+        
+        // Revert unit test preferences after each spec
+        afterEach(function () {
+            // Clean up preferencesKey
+            localStorage.removeItem("preferencesKey");
+            
+            SpecRunnerUtils.runAfterLast();
+        });
+        
+        // Delete temp folder before running the first test
+        beforeFirst(function () {
+            SpecRunnerUtils.removeTempDirectory();
+        });
+        
+        // Delete temp folder after running the last test
+        afterLast(function () {
+            SpecRunnerUtils.removeTempDirectory();
+        });
+    }
+    
+    function init() {
         selectedSuites = (params.get("suite") || localStorage.getItem("SpecRunner.suite") || "unit").split(",");
         
         // Create a top-level filter to show/hide performance and extensions tests
@@ -305,23 +321,14 @@ define(function (require, exports, module) {
         
         _loadExtensionTests(selectedSuites).done(function () {
             var jasmineEnv = jasmine.getEnv();
-            
-            // Initiailize unit test preferences for each spec
-            beforeEach(function () {
-                // Unique key for unit testing
-                localStorage.setItem("preferencesKey", SpecRunnerUtils.TEST_PREFERENCES_KEY);
-            });
-            
-            afterEach(function () {
-                // Clean up preferencesKey
-                localStorage.removeItem("preferencesKey");
-            });
-            
             jasmineEnv.updateInterval = 1000;
+            
+            _registerBeforeAfterHandlers();
             
             // Create the reporter, which is really a model class that just gathers
             // spec and performance data.
             reporter = new UnitTestReporter(jasmineEnv, topLevelFilter, params.get("spec"));
+            SpecRunnerUtils.setUnitTestReporter(reporter);
             
             // Optionally emit JUnit XML file for automated runs
             if (resultsPath) {
@@ -349,21 +356,53 @@ define(function (require, exports, module) {
             
             $(window.document).ready(_documentReadyHandler);
         });
+        
+        
+        // Prevent clicks on any link from navigating to a different page (which could lose unsaved
+        // changes). We can't use a simple .on("click", "a") because of http://bugs.jquery.com/ticket/3861:
+        // jQuery hides non-left clicks from such event handlers, yet middle-clicks still cause CEF to
+        // navigate. Also, a capture handler is more reliable than bubble.
+        window.document.body.addEventListener("click", function (e) {
+            // Check parents too, in case link has inline formatting tags
+            var node = e.target, url;
+            
+            while (node) {
+                if (node.tagName === "A") {
+                    url = node.getAttribute("href");
+                    if (url && url.match(/^http/)) {
+                        NativeApp.openURLInDefaultBrowser(url);
+                        e.preventDefault();
+                    }
+                    break;
+                }
+                node = node.parentElement;
+            }
+        }, true);
     }
 
-    /**
-     * Allows access to the deferred that manages the node connection for tests.
-     *
-     * @return {jQuery.Deferred} The deferred that manages the node connection
-     */
-    function getNodeConnectionDeferred() {
-        return _nodeConnectionDeferred;
+    function connectToTestDomain() {
+        var _nodeConnectionDeferred = new $.Deferred(),
+            _nodeConnection = new NodeConnection();
+
+        _nodeConnection.connect(true).then(function () {
+            var domainPath = FileUtils.getNativeBracketsDirectoryPath() + "/" + FileUtils.getNativeModuleDirectoryPath(module) + "/../test/node/TestingDomain";
+            
+            _nodeConnection.loadDomains(domainPath, true)
+                .then(init, function () {
+                    // Failed to connect
+                    console.error("[SpecRunner] Failed to connect to node", arguments);
+                    
+                    var container = $('<div class="container-fluid">');
+                    container.append('<div class="alert alert-error">Failed to connect to Node</div>');
+                    
+                    $(window.document.body).append(container);
+                });
+        });
+
+        Async.withTimeout(_nodeConnectionDeferred.promise(), NODE_CONNECTION_TIMEOUT);
+        
+        brackets.testing = { nodeConnection: _nodeConnection };
     }
     
-    // this is used by SpecRunnerUtils
-    brackets.testing = {
-        getNodeConnectionDeferred: getNodeConnectionDeferred
-    };
-
-    init();
+    connectToTestDomain();
 });

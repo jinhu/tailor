@@ -22,7 +22,7 @@
  */
 
 /*jslint vars: true, plusplus: true, devel: true, browser: true, nomen: true, indent: 4, maxerr: 50 */
-/*global define, describe, beforeEach, afterEach, it, runs, waits, waitsForDone, expect, $  */
+/*global define, describe, beforeEach, afterEach, it, runs, waits, waitsForDone, expect, $, beforeFirst, afterLast  */
 
 define(function (require, exports, module) {
     "use strict";
@@ -50,22 +50,21 @@ define(function (require, exports, module) {
          * @param {!string} openFile Project relative file path to open in a main editor.
          * @param {!number} openPos The pos within openFile to place the IP.
          */
-        var _initCodeHintTest = function (openFile, openPos) {
-            
+        function initCodeHintTest(openFile, openPos) {
             SpecRunnerUtils.loadProjectInTestWindow(testPath);
             
             runs(function () {
                 var promise = SpecRunnerUtils.openProjectFiles([openFile]);
                 waitsForDone(promise);
             });
+            
             runs(function () {
                 var editor = EditorManager.getCurrentFullEditor();
                 editor.setCursorPos(openPos.line, openPos.ch);
             });
-        };
-    
-        beforeEach(function () {
-            initCodeHintTest = _initCodeHintTest.bind(this);
+        }
+        
+        beforeFirst(function () {
             SpecRunnerUtils.createTestWindowAndRun(this, function (w) {
                 testWindow = w;
     
@@ -79,11 +78,21 @@ define(function (require, exports, module) {
                 KeyBindingManager   = testWindow.brackets.test.KeyBindingManager;
             });
         });
-    
-        afterEach(function () {
+        
+        afterLast(function () {
+            testWindow          = null;
+            CodeHintManager     = null;
+            EditorManager       = null;
+            CommandManager      = null;
+            KeyBindingManager   = null;
             SpecRunnerUtils.closeTestWindow();
         });
         
+        afterEach(function () {
+            runs(function () {
+                testWindow.closeAllFiles();
+            });
+        });
         
         function invokeCodeHints() {
             CommandManager.execute(Commands.SHOW_CODE_HINTS);
@@ -94,13 +103,13 @@ define(function (require, exports, module) {
             var codeHintList = CodeHintManager._getCodeHintList();
             expect(codeHintList).toBeFalsy();
         }
+        
         function expectSomeHints() {
             var codeHintList = CodeHintManager._getCodeHintList();
             expect(codeHintList).toBeTruthy();
             expect(codeHintList.isOpen()).toBe(true);
             return codeHintList;
         }
-        
         
         describe("Hint Provider Registration", function () {
             beforeEach(function () {
@@ -138,6 +147,8 @@ define(function (require, exports, module) {
                 runs(function () {
                     invokeCodeHints();
                     expectMockHints();
+                    
+                    CodeHintManager._removeHintProvider(mockProvider, ["clojure"], 0);
                 });
             });
             
@@ -150,6 +161,8 @@ define(function (require, exports, module) {
                     editor.setCursorPos(3, 1);
                     invokeCodeHints();
                     expectMockHints();
+                    
+                    CodeHintManager._removeHintProvider(mockProvider, ["html"], 1);
                 });
             });
             
@@ -168,6 +181,8 @@ define(function (require, exports, module) {
                 runs(function () {
                     invokeCodeHints();
                     expectMockHints();
+                    
+                    CodeHintManager._removeHintProvider(mockProvider, ["all"], 0);
                 });
             });
         });
@@ -213,12 +228,13 @@ define(function (require, exports, module) {
                     
                     // and popup should auto-close
                     expectNoHints();
+
+                    editor = null;
                 });
             });
 
             it("should dismiss code hints menu with Esc key", function () {
-                var editor,
-                    pos = {line: 3, ch: 1};
+                var pos = {line: 3, ch: 1};
 
                 // minimal markup with an open '<' before IP
                 // Note: line for pos is 0-based and editor lines numbers are 1-based
@@ -267,6 +283,8 @@ define(function (require, exports, module) {
                     
                     // verify list is no longer open
                     expectNoHints();
+
+                    editor = null;
                 });
             });
             
@@ -308,8 +326,9 @@ define(function (require, exports, module) {
                     // to move this expectNoHints() up after the click.
                     expectNoHints();
                     expect(editor.document.getText()).toEqual(text);
+
+                    editor = null;
                 });
-                
             });
         });
     });

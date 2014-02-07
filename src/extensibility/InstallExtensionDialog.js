@@ -22,19 +22,18 @@
  */
 
 /*jslint vars: true, plusplus: true, devel: true, nomen: true, indent: 4, maxerr: 50 */
-/*global define, window, $, brackets, PathUtils, Mustache, document */
+/*global define, window, $, brackets, Mustache, document */
 /*unittests: Install Extension Dialog*/
 
 define(function (require, exports, module) {
     "use strict";
     
-    require("thirdparty/path-utils/path-utils.min");
-
     var Dialogs                = require("widgets/Dialogs"),
         StringUtils            = require("utils/StringUtils"),
         Strings                = require("strings"),
         Commands               = require("command/Commands"),
         CommandManager         = require("command/CommandManager"),
+        FileSystem             = require("filesystem/FileSystem"),
         KeyEvent               = require("utils/KeyEvent"),
         Package                = require("extensibility/Package"),
         NativeApp              = require("utils/NativeApp"),
@@ -58,10 +57,11 @@ define(function (require, exports, module) {
      * Creates a new extension installer dialog.
      * @param {{install: function(url), cancel: function()}} installer The installer backend to use.
      */
-    function InstallExtensionDialog(installer) {
+    function InstallExtensionDialog(installer, _isUpdate) {
         this._installer = installer;
         this._state = STATE_CLOSED;
         this._installResult = null;
+        this._isUpdate = _isUpdate;
 
         // Timeout before we allow user to leave STATE_INSTALL_CANCELING without waiting for a resolution
         // (per-instance so we can poke it for unit testing)
@@ -254,9 +254,7 @@ define(function (require, exports, module) {
             // and the user cancels, we can delete the downloaded file.
             if (this._installResult && this._installResult.localPath) {
                 var filename = this._installResult.localPath;
-                brackets.fs.unlink(filename, function () {
-                    // ignore the result
-                });
+                FileSystem.getFileForPath(filename).unlink();
             }
             this._enterState(STATE_CLOSED);
         } else if (this._state !== STATE_CANCELING_INSTALL) {
@@ -331,10 +329,15 @@ define(function (require, exports, module) {
             // Somehow the dialog got invoked twice. Just ignore this.
             return this._dialogDeferred.promise();
         }
+
+        var context = {
+            Strings: Strings,
+            isUpdate: this._isUpdate
+        };
         
         // We ignore the promise returned by showModalDialogUsingTemplate, since we're managing the 
         // lifecycle of the dialog ourselves.
-        Dialogs.showModalDialogUsingTemplate(Mustache.render(InstallDialogTemplate, Strings), false);
+        Dialogs.showModalDialogUsingTemplate(Mustache.render(InstallDialogTemplate, context), false);
         
         this.$dlg          = $(".install-extension-dialog.instance");
         this.$url          = this.$dlg.find(".url").focus();
@@ -408,13 +411,25 @@ define(function (require, exports, module) {
      * @return {$.Promise} A promise object that will be resolved when the selected extension
      *     has finished installing, or rejected if the dialog is cancelled.
      */
-    function installUsingDialog(urlToInstall) {
-        var dlg = new InstallExtensionDialog(new InstallerFacade());
+    function installUsingDialog(urlToInstall, _isUpdate) {
+        var dlg = new InstallExtensionDialog(new InstallerFacade(), _isUpdate);
         return dlg.show(urlToInstall);
     }
     
-    exports.showDialog = showDialog;
-    exports.installUsingDialog = installUsingDialog;
+    /**
+     * @private
+     * Show the update dialog and automatically begin downloading the update from the given URL.
+     * @param {string} urlToUpdate URL to download
+     * @return {$.Promise} A promise object that will be resolved when the selected extension
+     *     has finished downloading, or rejected if the dialog is cancelled.
+     */
+    function updateUsingDialog(urlToUpdate) {
+        return installUsingDialog(urlToUpdate, true);
+    }
+    
+    exports.showDialog          = showDialog;
+    exports.installUsingDialog  = installUsingDialog;
+    exports.updateUsingDialog   = updateUsingDialog;
 
     // Exposed for unit testing only
     exports._Dialog = InstallExtensionDialog;

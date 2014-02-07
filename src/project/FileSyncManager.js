@@ -51,7 +51,7 @@ define(function (require, exports, module) {
         Strings             = require("strings"),
         StringUtils         = require("utils/StringUtils"),
         FileUtils           = require("file/FileUtils"),
-        NativeFileError     = require("file/NativeFileError");
+        FileSystemError     = require("filesystem/FileSystemError");
 
     
     /**
@@ -71,9 +71,9 @@ define(function (require, exports, module) {
     var toReload;
     /** @type {Array.<Document>} */
     var toClose;
-    /** @type {Array.<Document>} */
+    /** @type {Array.<{doc: Document, fileTime: number}>} */
     var editConflicts;
-    /** @type {Array.<Document>} */
+    /** @type {Array.<{doc: Document, fileTime: number}>} */
     var deleteConflicts;
     
     
@@ -122,12 +122,32 @@ define(function (require, exports, module) {
                         }
                         result.resolve();
                     } else {
-                        // Some other error fetching metadata: treat as a real error
-                        console.log("Error checking modification status of " + doc.file.fullPath, error.name);
-                        result.reject();
+                        // File has been deleted externally
+                        if (err === FileSystemError.NOT_FOUND) {
+                            // If the user has chosen to keep changes previously, and the file
+                            // has been deleted, then do nothing. Like the case above, this
+                            // means that even if the user later undoes back to clean, we won't
+                            // then automatically delete the file on window reactivation.
+                            // (We use -1 as the "mod time" to indicate that the file didn't
+                            // exist, since there's no actual modification time to keep track of
+                            // and -1 isn't a valid mod time for a real file.)
+                            if (doc.keepChangesTime !== -1) {
+                                if (doc.isDirty) {
+                                    deleteConflicts.push({doc: doc, fileTime: -1});
+                                } else {
+                                    toClose.push(doc);
+                                }
+                            }
+                            result.resolve();
+                        } else {
+                            // Some other error fetching metadata: treat as a real error
+                            console.log("Error checking modification status of " + doc.file.fullPath, err);
+                            result.reject();
+                        }
                     }
-                }
-            );
+                });
+            }
+
             return result.promise();
         }
         
@@ -190,7 +210,7 @@ define(function (require, exports, module) {
             doc.refreshText(text, readTimestamp);
         });
         promise.fail(function (error) {
-            console.log("Error reloading contents of " + doc.file.fullPath, error.name);
+            console.log("Error reloading contents of " + doc.file.fullPath, error);
         });
         return promise;
     }
@@ -218,7 +238,7 @@ define(function (require, exports, module) {
             StringUtils.format(
                 Strings.ERROR_RELOADING_FILE,
                 StringUtils.breakableUrl(doc.file.fullPath),
-                FileUtils.getFileErrorString(error.name)
+                FileUtils.getFileErrorString(error)
             )
         );
     }
@@ -248,8 +268,11 @@ define(function (require, exports, module) {
         
         var allConflicts = editConflicts.concat(deleteConflicts);
         
-        function presentConflict(doc, i) {
-            var result = new $.Deferred(), promise = result.promise();
+        function presentConflict(docInfo, i) {
+            var result = new $.Deferred(),
+                promise = result.promise(),
+                doc = docInfo.doc,
+                fileTime = docInfo.fileTime;
             
             // If window has been re-focused, skip all remaining conflicts so the sync can bail & restart
             if (_restartPending) {
@@ -332,10 +355,18 @@ define(function (require, exports, module) {
                         }
                         
                     } else {
-                        // Cancel - if user doesn't manually save or close, we'll prompt again next
-                        // time window is reactivated;
+                        // Cancel - if user doesn't manually save or close, remember that they
+                        // chose to keep the changes in the editor and don't prompt again unless the
+                        // file changes again
                         // OR programmatically canceled due to _resetPending - we'll skip all
                         // remaining files in the conflicts list (see above)
+
+                        // If this wasn't programmatically cancelled, remember that the user 
+                        // has accepted conflicting changes as of this file version.
+                        if (!_restartPending) {
+                            doc.keepChangesTime = fileTime;
+                        }
+                            
                         result.resolve();
                     }
                 });

@@ -23,13 +23,14 @@
 
 
 /*jslint vars: true, plusplus: true, devel: true, nomen: true, indent: 4, maxerr: 50 */
-/*global define, $, PathUtils */
+/*global define, $ */
 
 define(function (require, exports, module) {
     "use strict";
     
     var EditorManager       = require("editor/EditorManager"),
         FileUtils           = require("file/FileUtils"),
+        InMemoryFile        = require("document/InMemoryFile"),
         PerfUtils           = require("utils/PerfUtils"),
         LanguageManager     = require("language/LanguageManager");
     
@@ -68,7 +69,7 @@ define(function (require, exports, module) {
      * deleted -- When the file for this document has been deleted. All views onto the document should
      *      be closed. The document will no longer be editable or dispatch "change" events.
      *
-     * @param {!FileEntry} file  Need not lie within the project.
+     * @param {!File} file  Need not lie within the project.
      * @param {!Date} initialTimestamp  File's timestamp when we read it off disk.
      * @param {!string} rawText  Text content of the file.
      */
@@ -89,8 +90,9 @@ define(function (require, exports, module) {
     Document.prototype._refCount = 0;
     
     /**
-     * The FileEntry for this document. Need not lie within the project.
-     * @type {!FileEntry}
+     * The File for this document. Need not lie within the project.
+     * If Document is untitled, this is an InMemoryFile object.
+     * @type {!File}
      */
     Document.prototype.file = null;
 
@@ -113,6 +115,22 @@ define(function (require, exports, module) {
      * @type {!Date}
      */
     Document.prototype.diskTimestamp = null;
+    
+    /**
+     * The timestamp of the document at the point where the user last said to keep changes that conflict
+     * with the current disk version. Can also be -1, indicating that the file was deleted on disk at the
+     * last point when the user said to keep changes, or null, indicating that the user has not said to
+     * keep changes.
+     * Note that this is a time as returned by Date.getTime(), not a Date object.
+     * @type {?Number}
+     */
+    Document.prototype.keepChangesTime = null;
+
+    /**
+     * True while refreshText() is in progress and change notifications shouldn't trip the dirty flag.
+     * @type {boolean}
+     */
+    Document.prototype._refreshInProgress = false;
     
     /**
      * The text contents of the file, or null if our backing model is _masterEditor.
@@ -232,9 +250,14 @@ define(function (require, exports, module) {
             if (useOriginalLineEndings) {
                 return this._text;
             } else {
-                return this._text.replace(/\r\n/g, "\n");
+                return Document.normalizeText(this._text);
             }
         }
+    };
+    
+    /** Normalizes line endings the same way CodeMirror would */
+    Document.normalizeText = function (text) {
+        return text.replace(/\r\n/g, "\n");
     };
     
     /**
@@ -258,8 +281,12 @@ define(function (require, exports, module) {
     Document.prototype.refreshText = function (text, newTimestamp) {
         var perfTimerName = PerfUtils.markStart("refreshText:\t" + (!this.file || this.file.fullPath));
 
+        // If clean, don't transiently mark dirty during refresh
+        // (we'll still send change events though, of course)
+        this._refreshInProgress = true;
+        
         if (this._masterEditor) {
-            this._masterEditor._resetText(text);
+            this._masterEditor._resetText(text);  // clears undo history too
             // _handleEditorChange() triggers "change" event for us
         } else {
             this._text = text;
@@ -270,8 +297,14 @@ define(function (require, exports, module) {
             // either be an array of lines or a single string?
             $(this).triggerHandler("change", [this, {text: text.split(/\r?\n/)}]);
         }
-        this._markClean();
-        this.diskTimestamp = newTimestamp;
+        this._updateTimestamp(newTimestamp);
+       
+        // If Doc was dirty before refresh, reset it to clean now (don't always call, to avoid no-op dirtyFlagChange events) Since
+        // _resetText() above already ensures Editor state is clean, it's safe to skip _markClean() as long as our own state is already clean too.
+        if (this.isDirty) {
+            this._markClean();
+        }
+        this._refreshInProgress = false;
         
         // Sniff line-ending style
         this._lineEndings = FileUtils.sniffLineEndings(text);
@@ -354,14 +387,15 @@ define(function (require, exports, module) {
      * @private
      */
     Document.prototype._handleEditorChange = function (event, editor, changeList) {
-        // On any change, mark the file dirty. In the future, we should make it so that if you
-        // undo back to the last saved state, we mark the file clean.
-        var wasDirty = this.isDirty;
-        this.isDirty = !editor._codeMirror.isClean();
-        
-        // If file just became dirty, notify listeners, and add it to working set (if not already there)
-        if (wasDirty !== this.isDirty) {
-            $(exports).triggerHandler("_dirtyFlagChange", [this]);
+        if (!this._refreshInProgress) {
+            // Sync isDirty from CodeMirror state
+            var wasDirty = this.isDirty;
+            this.isDirty = !editor._codeMirror.isClean();
+            
+            // Notify if isDirty just changed (this also auto-adds us to working set if needed)
+            if (wasDirty !== this.isDirty) {
+                $(exports).triggerHandler("_dirtyFlagChange", [this]);
+            }
         }
         
         // Notify that Document's text has changed
@@ -369,6 +403,7 @@ define(function (require, exports, module) {
         // future, we should fix things so that we either don't need mock documents or that this
         // is factored so it will just run in both.
         $(this).triggerHandler("change", [this, changeList]);
+        $(exports).triggerHandler("documentChange", [this, changeList]);
     };
     
     /**
@@ -380,6 +415,15 @@ define(function (require, exports, module) {
             this._masterEditor._codeMirror.markClean();
         }
         $(exports).triggerHandler("_dirtyFlagChange", this);
+    };
+    
+    /**
+     * @private
+     */
+    Document.prototype._updateTimestamp = function (timestamp) {
+        this.diskTimestamp = timestamp;
+        // Clear the "keep changes" timestamp since it's no longer relevant.
+        this.keepChangesTime = null;
     };
     
     /** 
@@ -395,16 +439,14 @@ define(function (require, exports, module) {
         
         // TODO: (issue #295) fetching timestamp async creates race conditions (albeit unlikely ones)
         var thisDoc = this;
-        this.file.getMetadata(
-            function (metadata) {
-                thisDoc.diskTimestamp = metadata.modificationTime;
-                $(exports).triggerHandler("_documentSaved", thisDoc);
-            },
-            function (error) {
+        this.file.stat(function (err, stat) {
+            if (!err) {
+                thisDoc._updateTimestamp(stat.mtime);
+            } else {
                 console.log("Error updating timestamp after saving file: " + thisDoc.file.fullPath);
-                $(exports).triggerHandler("_documentSaved", thisDoc);
             }
-        );
+            $(exports).triggerHandler("_documentSaved", thisDoc);
+        });
     };
     
     /* (pretty toString(), to aid debugging) */
@@ -440,6 +482,15 @@ define(function (require, exports, module) {
     Document.prototype._notifyFilePathChanged = function () {
         // File extension may have changed
         this._updateLanguage();
+    };
+    
+    /**
+     * Is this an untitled document?
+     * 
+     * @return {boolean} - whether or not the document is untitled
+     */
+    Document.prototype.isUntitled = function () {
+        return this.file instanceof InMemoryFile;
     };
 
 

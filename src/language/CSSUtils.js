@@ -22,7 +22,7 @@
  */
 
 
-/*jslint vars: true, plusplus: true, devel: true, nomen: true, indent: 4, maxerr: 50 */
+/*jslint vars: true, plusplus: true, devel: true, nomen: true, indent: 4, maxerr: 50, regexp: true */
 /*global define, $, CodeMirror, _parseRuleList: true */
 
 // JSLint Note: _parseRuleList() is cyclical dependency, not a global function.
@@ -39,6 +39,7 @@ define(function (require, exports, module) {
         EditorManager       = require("editor/EditorManager"),
         HTMLUtils           = require("language/HTMLUtils"),
         FileIndexManager    = require("project/FileIndexManager"),
+        //ProjectManager      = require("project/ProjectManager"),
         TokenUtils          = require("utils/TokenUtils");
 
     // Constants
@@ -47,6 +48,11 @@ define(function (require, exports, module) {
         PROP_VALUE = "prop.value",
         IMPORT_URL = "import.url";
 
+    var RESERVED_FLOW_NAMES = ["content", "element"],
+        INVALID_FLOW_NAMES = ["none", "inherit", "default", "auto", "initial"],
+        IGNORED_FLOW_NAMES = RESERVED_FLOW_NAMES.concat(INVALID_FLOW_NAMES);
+    
+    
     /**
      * @private
      * Checks if the current cursor position is inside the property name context
@@ -62,12 +68,12 @@ define(function (require, exports, module) {
 
         state = ctx.token.state.localState || ctx.token.state;
         
-        if (!state.stack || state.stack.length < 1) {
+        if (!state.context) {
             return false;
         }
         
-        lastToken = state.stack[state.stack.length - 1];
-        return (lastToken === "{" || lastToken === "rule");
+        lastToken = state.context.type;
+        return (lastToken === "{" || lastToken === "rule" || lastToken === "block");
     }
     
     /**
@@ -78,26 +84,27 @@ define(function (require, exports, module) {
      */
     function _isInPropValue(ctx) {
         var state;
-        if (!ctx || !ctx.token || !ctx.token.state || ctx.token.type === "comment" ||
-                ctx.token.type === "property" || ctx.token.type === "property error" || ctx.token.type === "tag") {
+        if (!ctx || !ctx.token || !ctx.token.state || ctx.token.type === "comment") {
             return false;
         }
 
         state = ctx.token.state.localState || ctx.token.state;
         
-        if (!state.stack || state.stack.length < 2) {
+        if (!state.context || !state.context.prev) {
             return false;
         }
-        return (state.stack[state.stack.length - 1] === "propertyValue" && state.stack[state.stack.length - 2] === "rule");
+        return ((state.context.type === "prop" &&
+                    (state.context.prev.type === "rule" || state.context.prev.type === "block")) ||
+                    (state.context.type === "parens" && state.context.prev.type === "prop"));
     }
     
     /**
      * @private
-     * Checks if the current cursor position is inside an @import rule
+     * Checks if the current cursor position is inside an at-rule
      * @param {editor:{CodeMirror}, pos:{ch:{string}, line:{number}}, token:{object}} context
      * @return {boolean} true if the context is in property value
      */
-    function _isInImportRule(ctx) {
+    function _isInAtRule(ctx) {
         var state;
         if (!ctx || !ctx.token || !ctx.token.state) {
             return false;
@@ -105,10 +112,10 @@ define(function (require, exports, module) {
 
         state = ctx.token.state.localState || ctx.token.state;
         
-        if (!state.stack || state.stack.length < 1) {
+        if (!state.context) {
             return false;
         }
-        return (state.stack[0] === "@import");
+        return (state.context.type === "at");
     }
 
     /**
@@ -154,10 +161,9 @@ define(function (require, exports, module) {
     function _getPropNameStartingFromPropValue(ctx) {
         var ctxClone = $.extend({}, ctx);
         do {
-            // If we get a property name or "{" or ";" before getting a colon, then we don't 
+            // If we're no longer in the property value before seeing a colon, then we don't
             // have a valid property name. Just return an empty string.
-            if (ctxClone.token.type === "property" || ctxClone.token.type === "property error" ||
-                    ctxClone.token.string === "{" || ctxClone.token.string === ";") {
+            if (ctxClone.token.string !== ":" && !_isInPropValue(ctxClone)) {
                 return "";
             }
         } while (ctxClone.token.string !== ":" && TokenUtils.moveSkippingWhitespace(TokenUtils.movePrevToken, ctxClone));
@@ -182,9 +188,7 @@ define(function (require, exports, module) {
             curValue,
             propValues = [];
         while (ctx.token.string !== ":" && TokenUtils.movePrevToken(ctx)) {
-            if (ctx.token.type === "property" || ctx.token.type === "property error" || ctx.token.type === "tag" ||
-                    ctx.token.string === ":" || ctx.token.string === "{" ||
-                    ctx.token.string === ";") {
+            if (ctx.token.string === ":" || !_isInPropValue(ctx)) {
                 break;
             }
 
@@ -229,14 +233,11 @@ define(function (require, exports, module) {
             curValue,
             propValues = [];
         
-        while (ctx.token.string !== ";" && TokenUtils.moveNextToken(ctx)) {
+        while (ctx.token.string !== ";" && ctx.token.string !== "}" && TokenUtils.moveNextToken(ctx)) {
             if (ctx.token.string === ";" || ctx.token.string === "}") {
                 break;
             }
-            // If we're already in the next rule, then we don't want to add the last value
-            // since it is the property name of the next rule.
-            if (ctx.token.type === "property" || ctx.token.type === "property error" || ctx.token.type === "tag" ||
-                    ctx.token.string === ":") {
+            if (!_isInPropValue(ctx)) {
                 lastValue = "";
                 break;
             }
@@ -252,7 +253,11 @@ define(function (require, exports, module) {
                     lastValue += ctx.token.string;
                 } else if (lastValue && lastValue.match(/,$/)) {
                     propValues.push(lastValue);
-                    lastValue = "";
+                    if (ctx.token.string.length > 0) {
+                        lastValue = ctx.token.string;
+                    } else {
+                        lastValue = "";
+                    }
                 } else {
                     // e.g. "rgba(50" gets broken into 2 tokens
                     lastValue += ctx.token.string;
@@ -444,7 +449,7 @@ define(function (require, exports, module) {
             mode = editor.getModeForSelection();
         
         // Check if this is inside a style block or in a css/less document.
-        if (mode !== "css" && mode !== "less") {
+        if (mode !== "css" && mode !== "text/x-scss" && mode !== "text/x-less") {
             return createInfo();
         }
 
@@ -474,7 +479,7 @@ define(function (require, exports, module) {
             return _getRuleInfoStartingFromPropValue(ctx, editor);
         }
 
-        if (_isInImportRule(ctx)) {
+        if (_isInAtRule(ctx)) {
             return _getImportUrlInfo(ctx, editor);
         }
         
@@ -496,11 +501,13 @@ define(function (require, exports, module) {
                                    starts that this selector (e.g. .baz) is part of. Particularly relevant for
                                    groups that are on multiple lines.
          selectorGroupStartChar:   column in line where the selector group starts.
+         selectorGroup:            the entire selector group containing this selector, or undefined if there 
+                                   is only one selector in the rule.
          declListStartLine:        line where the declaration list for the rule starts
          declListStartChar:        column in line where the declaration list for the rule starts
          declListEndLine:          line where the declaration list for the rule ends
          declListEndChar:          column in the line where the declaration list for the rule ends
-     * @param text {!String} CSS text to extract from
+     * @param text {!string} CSS text to extract from
      * @return {Array.<Object>} Array with objects specifying selectors.
      */
     function extractAllSelectors(text) {
@@ -622,7 +629,7 @@ define(function (require, exports, module) {
             while (token !== "," && token !== "{") {
                 currentSelector += token;
                 if (!_nextTokenSkippingComments()) {
-                    break;
+                    return false; // eof
                 }
             }
             
@@ -662,26 +669,54 @@ define(function (require, exports, module) {
                 currentSelector = "";
             }
             selectorStartChar = -1;
+
+            return true;
         }
         
         function _parseSelectorList() {
             selectorGroupStartLine = (stream.string.indexOf(",") !== -1) ? line : -1;
             selectorGroupStartChar = stream.start;
 
-            _parseSelector(stream.start);
+            if (!_parseSelector(stream.start)) {
+                return false;
+            }
+
             while (token === ",") {
                 if (!_nextTokenSkippingComments()) {
-                    break;
+                    return false; // eof
                 }
-                _parseSelector(stream.start);
+                if (!_parseSelector(stream.start)) {
+                    return false;
+                }
             }
+
+            return true;
         }
 
         function _parseDeclarationList() {
 
             var j;
-            declListStartLine = line;
+            declListStartLine = Math.min(line, lineCount - 1);
             declListStartChar = stream.start;
+            
+            // Extract the entire selector group we just saw.
+            var selectorGroup, sgLine;
+            if (selectorGroupStartLine !== -1) {
+                selectorGroup = "";
+                for (sgLine = selectorGroupStartLine; sgLine <= declListStartLine; sgLine++) {
+                    var startChar = 0, endChar = lines[sgLine].length;
+                    if (sgLine === selectorGroupStartLine) {
+                        startChar = selectorGroupStartChar;
+                    } else {
+                        selectorGroup += " "; // replace the newline with a single space
+                    }
+                    if (sgLine === declListStartLine) {
+                        endChar = declListStartChar;
+                    }
+                    selectorGroup += lines[sgLine].substring(startChar, endChar);
+                }
+                selectorGroup = selectorGroup.trim();
+            }
 
             // Since we're now in a declaration list, that means we also finished
             // parsing the whole selector group. Therefore, reset selectorGroupStartLine
@@ -698,7 +733,7 @@ define(function (require, exports, module) {
                 }
             }
             
-            // assign this declaration list position to every selector on the stack
+            // assign this declaration list position and selector group to every selector on the stack
             // that doesn't have a declaration list start and end line
             for (j = selectors.length - 1; j >= 0; j--) {
                 if (selectors[j].declListEndLine !== -1) {
@@ -708,6 +743,9 @@ define(function (require, exports, module) {
                     selectors[j].declListStartChar = declListStartChar;
                     selectors[j].declListEndLine = line;
                     selectors[j].declListEndChar = stream.pos - 1; // stream.pos actually points to the char after the }
+                    if (selectorGroup) {
+                        selectors[j].selectorGroup = selectorGroup;
+                    }
                 }
             }
         }
@@ -742,10 +780,14 @@ define(function (require, exports, module) {
                 // Skip everything until the opening '{'
                 while (token !== "{") {
                     if (!_nextTokenSkippingComments()) {
-                        break;
+                        return; // eof
                     }
                 }
-                _nextTokenSkippingWhitespace();    // skip past '{', to next non-ws token
+
+                // skip past '{', to next non-ws token
+                if (!_nextTokenSkippingWhitespace()) {
+                    return; // eof
+                }
 
                 // Parse rules until we see '}'
                 _parseRuleList("}");
@@ -757,7 +799,7 @@ define(function (require, exports, module) {
                 // Skip everything until the next ';'
                 while (token !== ";") {
                     if (!_nextTokenSkippingComments()) {
-                        break;
+                        return; // eof
                     }
                 }
                 
@@ -768,7 +810,7 @@ define(function (require, exports, module) {
                 // Skip everything until the next '}'
                 while (token !== "}") {
                     if (!_nextTokenSkippingComments()) {
-                        break;
+                        return; // eof
                     }
                 }
             }
@@ -776,7 +818,10 @@ define(function (require, exports, module) {
 
         // parse a style rule
         function _parseRule() {
-            _parseSelectorList();
+            if (!_parseSelectorList()) {
+                return false;
+            }
+
             _parseDeclarationList();
         }
         
@@ -850,8 +895,8 @@ define(function (require, exports, module) {
      * jquery and ask what matches. If the node that the user's cursor is in comes back from jquery, then 
      * we know the selector applies.
      *
-     * @param text {!String} CSS text to search
-     * @param selector {!String} selector to search for
+     * @param text {!string} CSS text to search
+     * @param selector {!string} selector to search for
      * @return {Array.<{selectorGroupStartLine:number, declListEndLine:number, selector:string}>}
      *      Array of objects containing the start and end line numbers (0-based, inclusive range) for each
      *      matched selector.
@@ -907,15 +952,15 @@ define(function (require, exports, module) {
                 name: selectorInfo.selector,
                 document: sourceDoc,
                 lineStart: selectorInfo.ruleStartLine + lineOffset,
-                lineEnd: selectorInfo.declListEndLine + lineOffset
+                lineEnd: selectorInfo.declListEndLine + lineOffset,
+                selectorGroup: selectorInfo.selectorGroup
             });
         });
     }
     
     /** Finds matching selectors in CSS files; adds them to 'resultSelectors' */
     function _findMatchingRulesInCSSFiles(selector, resultSelectors) {
-        var result          = new $.Deferred(),
-            cssFilesResult  = FileIndexManager.getFileInfoList("css");
+        var result          = new $.Deferred();
         
         // Load one CSS file and search its contents
         function _loadFileAndScan(fullPath, selector) {
@@ -937,13 +982,14 @@ define(function (require, exports, module) {
             return oneFileResult.promise();
         }
         
-        // Load index of all CSS files; then process each CSS file in turn (see above)
-        cssFilesResult.done(function (fileInfos) {
-            Async.doInParallel(fileInfos, function (fileInfo, number) {
-                return _loadFileAndScan(fileInfo.fullPath, selector);
-            })
-                .then(result.resolve, result.reject);
-        });
+        ProjectManager.getAllFiles(ProjectManager.getLanguageFilter("css"))
+            .done(function (cssFiles) {
+                // Load index of all CSS files; then process each CSS file in turn (see above)
+                Async.doInParallel(cssFiles, function (fileInfo, number) {
+                    return _loadFileAndScan(fileInfo.fullPath, selector);
+                })
+                    .then(result.resolve, result.reject);
+            });
         
         return result.promise();
     }
@@ -983,7 +1029,7 @@ define(function (require, exports, module) {
      *  div .foo .bar {}
      *  .foo.bar {}
      *
-     * @param {!String} selector The selector to match. This can be a tag selector, class selector or id selector
+     * @param {!string} selector The selector to match. This can be a tag selector, class selector or id selector
      * @param {?Document} htmlDocument An HTML file for context (so we can search <style> blocks)
      * @return {$.Promise} that will be resolved with an Array of objects containing the
      *      source document, start line, and end line (0-based, inclusive range) for each matching declaration list.
@@ -1048,6 +1094,17 @@ define(function (require, exports, module) {
                     if (/[\{\}\;]/.test(ctx.token.string)) {
                         break;
                     }
+                    
+                    // Stop once we've reached a <style ...> tag
+                    if (ctx.token.string === "<style") {
+                        // Remove everything up to end-of-tag from selector
+                        var eotIndex = selector.indexOf(">");
+                        if (eotIndex !== -1) {
+                            selector = selector.substring(eotIndex + 1);
+                        }
+                        break;
+                    }
+                    
                     selector = ctx.token.string + selector;
                 }
                 if (!TokenUtils.movePrevToken(ctx)) {
@@ -1114,10 +1171,166 @@ define(function (require, exports, module) {
         return _stripAtRules(selector);
     }
     
+    /**
+     * removes CSS comments from the content 
+     * @param {!string} content to reduce
+     * @return {string} reduced content 
+     */
+    function _removeComments(content) {
+        return content.replace(/\/\*(?:(?!\*\/)[\s\S])*\*\//g, "");
+    }
+    
+    /**
+     * removes strings from the content 
+     * @param {!string} content to reduce
+     * @return {string} reduced content 
+     */
+    function _removeStrings(content) {
+        return content.replace(/[^\\]\"(.*)[^\\]\"|[^\\]\'(.*)[^\\]\'+/g, "");
+    }
+    
+    /**
+     * Reduces the style sheet by removing comments and strings 
+     * so that the content can be parsed using a regular expression
+     * @param {!string} content to reduce
+     * @return {string} reduced content 
+     */
+    function reduceStyleSheetForRegExParsing(content) {
+        return _removeStrings(_removeComments(content));
+    }
+    
+    /**
+     * Extracts all named flow instances
+     * @param {!string} text to extract from
+     * @return {Array.<string>} array of unique flow names found in the content (empty if none)
+     */
+    function extractAllNamedFlows(text) {
+        var namedFlowRegEx = /(?:flow\-(into|from)\:\s*)([\w\-]+)(?:\s*;)/gi,
+            result = [],
+            names = {},
+            thisMatch;
+        
+        // Reduce the content so that matches 
+        // inside strings and comments are ignored 
+        text = reduceStyleSheetForRegExParsing(text);
+
+        // Find the first match
+        thisMatch = namedFlowRegEx.exec(text);
+        
+        // Iterate over the matches and add them to result
+        while (thisMatch) {
+            var thisName = thisMatch[2];
+            
+            if (IGNORED_FLOW_NAMES.indexOf(thisName) === -1 && !names.hasOwnProperty(thisName)) {
+                names[thisName] = result.push(thisName);
+            }
+            thisMatch = namedFlowRegEx.exec(text);
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Adds a new rule to the end of the given document, and returns the range of the added rule
+     * and the position of the cursor on the indented blank line within it. Note that the range will
+     * not include all the inserted text (we insert extra newlines before and after the rule).
+     * @param {Document} doc The document to insert the rule into.
+     * @param {string} selector The selector to use for the given rule.
+     * @param {boolean} useTabChar Whether to indent with a tab.
+     * @param {number} indentUnit If useTabChar is false, how many spaces to indent with.
+     * @return {{range: {from: {line: number, ch: number}, to: {line: number, ch: number}}, pos: {line: number, ch: number}}}
+     *     The range of the inserted rule and the location where the cursor should be placed.
+     */
+    function addRuleToDocument(doc, selector, useTabChar, indentUnit) {
+        var newRule = "\n" + selector + " {\n",
+            blankLineOffset;
+        if (useTabChar) {
+            newRule += "\t";
+            blankLineOffset = 1;
+        } else {
+            var i;
+            for (i = 0; i < indentUnit; i++) {
+                newRule += " ";
+            }
+            blankLineOffset = indentUnit;
+        }
+        newRule += "\n}\n";
+        
+        var docLines = doc.getText().split("\n"),
+            lastDocLine = docLines.length - 1,
+            lastDocChar = docLines[docLines.length - 1].length;
+        doc.replaceRange(newRule, {line: lastDocLine, ch: lastDocChar});
+        return {
+            range: {
+                from: {line: lastDocLine + 1, ch: 0},
+                to: {line: lastDocLine + 3, ch: 1}
+            },
+            pos: {line: lastDocLine + 2, ch: blankLineOffset}
+        };
+    }
+    
+    /**
+     * 
+     * In the given rule array (as returned by `findMatchingRules()`), if multiple rules in a row 
+     * refer to the same rule (because there were multiple matching selectors), eliminate the redundant 
+     * rules. Also, always use the selector group if available instead of the original matching selector.
+     */
+    function consolidateRules(rules) {
+        var newRules = [], lastRule;
+        rules.forEach(function (rule) {
+            if (rule.selectorGroup) {
+                rule.name = rule.selectorGroup;
+            }
+            // Push the entry unless it refers to the same rule as the previous entry.
+            if (!(lastRule &&
+                     rule.document === lastRule.document &&
+                     rule.lineStart === lastRule.lineStart &&
+                     rule.lineEnd === lastRule.lineEnd &&
+                     rule.selectorGroup === lastRule.selectorGroup)) {
+                newRules.push(rule);
+            }
+            lastRule = rule;
+        });
+        return newRules;
+    }
+    
+    /**
+     * Given a TextRange, extracts the selector(s) for the rule in the range and returns it.
+     * Assumes the range only contains one rule; if there's more than one, it will return the
+     * selector(s) for the first rule.
+     * @param {TextRange} range The range to extract the selector(s) from.
+     * @return {string} The selector(s) for the rule in the range.
+     */
+    function getRangeSelectors(range) {
+        // There's currently no immediate way to access a given line in a Document, because it's just
+        // stored as a string. Eventually, we should have Documents cache the lines in the document
+        // as well, or make them use CodeMirror documents which do the same thing.
+        var i, startIndex = 0, endIndex, text = range.document.getText();
+        for (i = 0; i < range.startLine; i++) {
+            startIndex = text.indexOf("\n", startIndex) + 1;
+        }
+        endIndex = startIndex;
+        // Go one line past the end line. We'll extract text up to but not including the last newline.
+        for (i = range.startLine + 1; i <= range.endLine + 1; i++) {
+            endIndex = text.indexOf("\n", endIndex) + 1;
+        }
+        var allSelectors = extractAllSelectors(text.substring(startIndex, endIndex));
+        
+        // There should only be one rule in the range, and if there are multiple selectors for
+        // the first rule, they'll all be recorded in the "selectorGroup" for the first selector,
+        // so we only need to look at the first one.
+        return (allSelectors.length ? allSelectors[0].selectorGroup || allSelectors[0].selector : "");
+    }
+        
     exports._findAllMatchingSelectorsInText = _findAllMatchingSelectorsInText; // For testing only
     exports.findMatchingRules = findMatchingRules;
     exports.extractAllSelectors = extractAllSelectors;
+    exports.extractAllNamedFlows = extractAllNamedFlows;
     exports.findSelectorAtDocumentPos = findSelectorAtDocumentPos;
+    exports.reduceStyleSheetForRegExParsing = reduceStyleSheetForRegExParsing;
+    exports.addRuleToDocument = addRuleToDocument;
+    exports.consolidateRules = consolidateRules;
+    exports.getRangeSelectors = getRangeSelectors;
 
     exports.SELECTOR = SELECTOR;
     exports.PROP_NAME = PROP_NAME;

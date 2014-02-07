@@ -22,16 +22,15 @@
  */
 
 
-/*jslint vars: true, plusplus: true, devel: true, nomen: true, indent: 4, maxerr: 50 */
-/*global define, $, JSLINT, Mustache, brackets */
+/*global define, $, JSLINT, brackets */
 
 /**
- * Allows JSLint to run on the current document and report results in a UI panel.
+ * Provides JSLint results via the core linting extension point
  */
 define(function (require, exports, module) {
     "use strict";
     
-    // Load dependent non-module scripts
+    // Load JSLint, a non-module lib
     require("thirdparty/jslint/jslint");
     
     // Load dependent modules
@@ -53,84 +52,45 @@ define(function (require, exports, module) {
         JSLintTemplate          = require("hgn!htmlContent/bottom-panel.html"),
         ResultsTemplate         = require("hgn!htmlContent/results-table.html"),
         GoldStarTemplate        = require("hgn!htmlContent/gold-star.html");
+
+    var CodeInspection     = brackets.getModule("language/CodeInspection"),
+        PreferencesManager = brackets.getModule("preferences/PreferencesManager"),
+        Strings            = brackets.getModule("strings"),
+        _                  = brackets.getModule("thirdparty/lodash");
     
-    var KeyboardPrefs = JSON.parse(require("text!keyboard.json")),
-        JSLintOptions = JSON.parse(require("text!config.json"));
-    
-    var INDICATOR_ID = "jslint-status",
-        defaultPrefs = {
-            enabled: JSLintOptions.enabled_by_default,
-            collapsed: false
-        };
-    
-    
-    /** @const {string} JSLint commands ID */
-    var TOGGLE_ENABLED   = "jslint.toggleEnabled";
-    var GOTO_FIRST_ERROR = "jslint.gotoFirstError";
+    var prefs = PreferencesManager.getExtensionPrefs("jslint");
     
     /**
      * @private
-     * @type {PreferenceStorage}
+     * 
+     * Used to keep track of the last options JSLint was run with to avoid running
+     * again when there were no changes.
      */
-    var _prefs = null;
+    var _lastRunOptions;
     
-    /**
-     * @private
-     * @type {boolean}
-     */
-    var _enabled = true;
+    prefs.definePreference("options", "object")
+        .on("change", function (e, data) {
+            var options = prefs.get("options");
+            if (!_.isEqual(options, _lastRunOptions)) {
+                CodeInspection.requestRun(Strings.JSLINT_NAME);
+            }
+        });
     
-    /**
-     * @private
-     * @type {boolean}
-     */
-    var _collapsed = false;
-    
-    /**
-     * @private
-     * @type {$.Element}
-     */
-    var $lintResults;
-    
-    /**
-     * @private
-     * @type {boolean}
-     */
-    var _gotoEnabled = false;
-    
-    /**
-     * Enable or disable the "Go to First JSLint Error" command
-     * @param {boolean} gotoEnabled Whether it is enabled.
-     */
-    function setGotoEnabled(gotoEnabled) {
-        CommandManager.get(GOTO_FIRST_ERROR).setEnabled(gotoEnabled);
-        _gotoEnabled = gotoEnabled;
-    }
+    // Predefined environments understood by JSLint.
+    var ENVIRONMENTS = ["browser", "node", "couch", "rhino"];
     
     /**
      * Run JSLint on the current document. Reports results to the main UI. Displays
      * a gold star when no errors are found.
      */
-    function run() {
-        var currentDoc = DocumentManager.getCurrentDocument();
-        
-        var perfTimerDOM,
-            perfTimerLint;
-        
-        var language = currentDoc ? LanguageManager.getLanguageForPath(currentDoc.file.fullPath) : "";
-        
-        if (_enabled && language && language.getId() === "javascript") {
-            perfTimerLint = PerfUtils.markStart("JSLint linting:\t" + (!currentDoc || currentDoc.file.fullPath));
-            var text = currentDoc.getText();
-            
-            // If a line contains only whitespace, remove the whitespace
-            // This should be doable with a regexp: text.replace(/\r[\x20|\t]+\r/g, "\r\r");,
-            // but that doesn't work.
-            var i, arr = text.split("\n");
-            for (i = 0; i < arr.length; i++) {
-                if (!arr[i].match(/\S/)) {
-                    arr[i] = "";
-                }
+    function lintOneFile(text, fullPath) {
+        // If a line contains only whitespace, remove the whitespace
+        // This should be doable with a regexp: text.replace(/\r[\x20|\t]+\r/g, "\r\r");,
+        // but that doesn't work.
+        var i, arr = text.split("\n");
+        for (i = 0; i < arr.length; i++) {
+            if (!arr[i].match(/\S/)) {
+                arr[i] = "";
             }
             text = arr.join("\n");
             
@@ -160,104 +120,59 @@ define(function (require, exports, module) {
                         var line      = lineTd.text();
                         var character = lineTd.data("character");
         
-                        var editor = EditorManager.getCurrentFullEditor();
-                        editor.setCursorPos(line - 1, character - 1, true);
-                        EditorManager.focusEditor();
-                    });
-                
-                if (!_collapsed) {
-                    Resizer.show($lintResults);
-                }
-                if (JSLINT.errors.length === 1) {
-                    StatusBar.updateIndicator(INDICATOR_ID, true, "jslint-errors", Strings.JSLINT_ERROR_INFORMATION);
-                } else {
-                    // Return the number of non-null errors
-                    var numberOfErrors = errors.length;
-                    // If there was a null value it means there was a stop notice and an indeterminate
-                    // upper bound on the number of JSLint errors, which we'll represent by appending a '+'
-                    if (numberOfErrors !== JSLINT.errors.length) {
-                        // First discard the stop notice
-                        numberOfErrors -= 1;
-                        numberOfErrors += "+";
-                    }
-                    StatusBar.updateIndicator(INDICATOR_ID, true, "jslint-errors",
-                        StringUtils.format(Strings.JSLINT_ERRORS_INFORMATION, numberOfErrors));
-                }
-                setGotoEnabled(true);
+        var options = prefs.get("options");
+
+        if (!options) {
+            options = {};
+        } else {
+            options = _.clone(options);
+        }
+        
+        if (!options.indent) {
+            // default to using the same indentation value that the editor is using
+            options.indent = PreferencesManager.get("spaceUnits");
+        }
+        
+        // If the user has not defined the environment, we use browser by default.
+        var hasEnvironment = _.some(ENVIRONMENTS, function (env) {
+            return options[env] !== undefined;
+        });
+        
+        if (!hasEnvironment) {
+            options.browser = true;
+        }
+
+        _lastRunOptions = _.clone(options);
+        
+        var jslintResult = JSLINT(text, options);
+        
+        if (!jslintResult) {
+            // Remove any trailing null placeholder (early-abort indicator)
+            var errors = JSLINT.errors.filter(function (err) { return err !== null; });
             
-            } else {
-                Resizer.hide($lintResults);
-                StatusBar.updateIndicator(INDICATOR_ID, true, "jslint-valid", Strings.JSLINT_NO_ERRORS);
-                setGotoEnabled(false);
-            }
+            errors = errors.map(function (jslintError) {
+                return {
+                    // JSLint returns 1-based line/col numbers
+                    pos: { line: jslintError.line - 1, ch: jslintError.character - 1 },
+                    message: jslintError.reason,
+                    type: CodeInspection.Type.WARNING
+                };
+            });
+            
+            var result = { errors: errors };
 
-            PerfUtils.addMeasurement(perfTimerDOM);
-
-        } else {
-            // JSLint is disabled or does not apply to the current file, hide the results
-            Resizer.hide($lintResults);
-            StatusBar.updateIndicator(INDICATOR_ID, true, "jslint-disabled", Strings.JSLINT_DISABLED);
-            setGotoEnabled(false);
-        }
-    }
-    
-    /**
-     * Update DocumentManager listeners.
-     */
-    function updateListeners() {
-        if (_enabled) {
-            // register our event listeners
-            $(DocumentManager)
-                .on("currentDocumentChange.jslint", function () {
-                    run();
-                })
-                .on("documentSaved.jslint documentRefreshed.jslint", function (event, document) {
-                    if (document === DocumentManager.getCurrentDocument()) {
-                        run();
-                    }
-                });
-        } else {
-            $(DocumentManager).off(".jslint");
-        }
-    }
-    
-    /**
-     * Enable or disable JSLint.
-     * @param {boolean} enabled Enabled state.
-     */
-    function setEnabled(enabled) {
-        _enabled = enabled;
-        
-        CommandManager.get(TOGGLE_ENABLED).setChecked(_enabled);
-        updateListeners();
-        _prefs.setValue("enabled", _enabled);
-    
-        // run immediately
-        run();
-    }
-    
-    
-    /** 
-     * Toggle the collapsed state for the panel
-     * @param {?boolean} collapsed Collapsed state. If omitted, the state is toggled.
-     */
-    function toggleCollapsed(collapsed) {
-        if (collapsed === undefined) {
-            collapsed = !_collapsed;
-        }
-        
-        _collapsed = collapsed;
-        _prefs.setValue("collapsed", _collapsed);
-        
-        if (_collapsed) {
-            Resizer.hide($lintResults);
-        } else {
-            if (JSLINT.errors && JSLINT.errors.length) {
-                Resizer.show($lintResults);
+            // If array terminated in a null it means there was a stop notice
+            if (errors.length !== JSLINT.errors.length) {
+                result.aborted = true;
+                errors[errors.length - 1].type = CodeInspection.Type.META;
             }
+            
+            return result;
         }
+        return null;
     }
     
+<<<<<<< HEAD
     /** Command to toggle enablement */
     function handleToggleEnabled() {
         setEnabled(!_enabled);
@@ -314,5 +229,11 @@ define(function (require, exports, module) {
         
         toggleCollapsed(_prefs.getValue("collapsed"));
                 
+=======
+    // Register for JS files
+    CodeInspection.register("javascript", {
+        name: Strings.JSLINT_NAME,
+        scanFile: lintOneFile
+>>>>>>> 06240746a50ab8e2878f4bceaedb4cfcdf3c5453
     });
 });

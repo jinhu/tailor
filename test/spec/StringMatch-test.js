@@ -29,6 +29,8 @@
 define(function (require, exports, module) {
     'use strict';
     
+    var _ = require("thirdparty/lodash");
+    
     var StringMatch = require("utils/StringMatch");
     
     describe("StringMatch", function () {
@@ -718,7 +720,7 @@ define(function (require, exports, module) {
             
             it("should accept old-style key: priority", function () {
                 // start with a copy of the array
-                var result = items.slice(0);
+                var result = _.clone(items);
                 StringMatch.multiFieldSort(result, {
                     value: 0,
                     name: 1
@@ -734,7 +736,7 @@ define(function (require, exports, module) {
             });
             
             it("should accept array of keys", function () {
-                var result = items.slice(0);
+                var result = _.clone(items);
                 StringMatch.multiFieldSort(result, ["value", "name"]);
                 expect(result).toEqual([
                     { value: 51, name: "Grapefruit" },
@@ -747,7 +749,7 @@ define(function (require, exports, module) {
             });
             
             it("should accept a comparison function", function () {
-                var result = items.slice(0);
+                var result = _.clone(items);
                 StringMatch.multiFieldSort(result, ["value", function (a, b) {
                     var aName = a.name.toLowerCase(), bName = b.name.toLowerCase();
                     // this sort function will cause _ to sort lower than lower case
@@ -821,14 +823,26 @@ define(function (require, exports, module) {
                 // Object.prototype has toString
                 var toStringResult = matcher.match("toString", "t");
                 expect(toStringResult).toBeTruthy();
+                toStringResult = matcher.match("toString", "x");
+                expect(toStringResult).toBeFalsy();
+                toStringResult = matcher.match("toString", "xx");   // 2nd no-match to test _noMatchCache
+                expect(toStringResult).toBeFalsy();
                 
                 // Array.prototype has length
                 var lengthResult = matcher.match("length", "l");
                 expect(lengthResult).toBeTruthy();
+                lengthResult = matcher.match("length", "x");
+                expect(lengthResult).toBeFalsy();
+                lengthResult = matcher.match("length", "xx");   // 2nd no-match to test _noMatchCache
+                expect(lengthResult).toBeFalsy();
                 
                 // Object.prototype has hasOwnProperty
                 var hasOwnPropertyResult = matcher.match("hasOwnProperty", "h");
                 expect(hasOwnPropertyResult).toBeTruthy();
+                hasOwnPropertyResult = matcher.match("hasOwnProperty", "x");
+                expect(hasOwnPropertyResult).toBeFalsy();
+                hasOwnPropertyResult = matcher.match("hasOwnProperty", "xx");   // 2nd no-match to test _noMatchCache
+                expect(hasOwnPropertyResult).toBeFalsy();
             });
             
             it("can reset the caches", function () {

@@ -30,7 +30,7 @@ define(function (require, exports, module) {
 
     // Core modules
     var EditorManager        = brackets.getModule("editor/EditorManager"),
-        NativeFileSystem     = brackets.getModule("file/NativeFileSystem").NativeFileSystem,
+        FileSystem           = brackets.getModule("filesystem/FileSystem"),
         FileUtils            = brackets.getModule("file/FileUtils"),
         ExtensionUtils       = brackets.getModule("utils/ExtensionUtils"),
         CSSUtils             = brackets.getModule("language/CSSUtils");
@@ -51,9 +51,10 @@ define(function (require, exports, module) {
         if (!_cssDocsPromise) {
             var result = new $.Deferred();
             
-            var path = ExtensionUtils.getModulePath(module, "css.json");
+            var path = ExtensionUtils.getModulePath(module, "css.json"),
+                file = FileSystem.getFileForPath(path);
             
-            FileUtils.readAsText(new NativeFileSystem.FileEntry(path))
+            FileUtils.readAsText(file)
                 .done(function (text) {
                     var jsonData;
                     try {
@@ -84,8 +85,9 @@ define(function (require, exports, module) {
      * @return {?$.Promise} resolved with an InlineWidget; null if we're not going to provide anything
      */
     function inlineProvider(hostEditor, pos) {
+        var langId = hostEditor.getLanguageForSelection().getId();
         // Only provide docs when cursor is in CSS content
-        if (hostEditor.getLanguageForSelection().getId() !== "css") {
+        if (langId !== "css" && langId !== "scss" && langId !== "less") {
             return null;
         }
         

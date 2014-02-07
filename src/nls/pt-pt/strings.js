@@ -53,7 +53,7 @@ define({
     "ERROR_RENAMING_FILE_TITLE"         : "Erro ao renomear ficheiro",
     "ERROR_RENAMING_FILE"               : "Ocorreu um erro ao tentar renomear o ficheiro <span class='dialog-filename'>{0}</span>. {1}",
     "INVALID_FILENAME_TITLE"            : "Nome do ficheiro inválido",
-    "INVALID_FILENAME_MESSAGE"          : "O nome do ficheiro não pode conter os seguintes caracteres: /?*:;{}<>\\|",
+    "INVALID_FILENAME_MESSAGE"          : "O nome do ficheiro não pode conter os seguintes caracteres: {0}",
     "FILE_ALREADY_EXISTS"               : "O ficheiro <span class='dialog-filename'>{0}</span> já existe.",
     "ERROR_CREATING_FILE_TITLE"         : "Erro ao criar ficheiro.",
     "ERROR_CREATING_FILE"               : "Ocorreu um erro ao tentar criar o ficheiro <span class='dialog-filename'>{0}</span>. {1}",
@@ -248,7 +248,7 @@ define({
     "BASEURL_ERROR_SEARCH_DISALLOWED"      : "O URL base não pode conter parametros de pesquisa como \"{0}\".",
     "BASEURL_ERROR_HASH_DISALLOWED"        : "O URL base não pode conter cardinal como \"{0}\".",
     "BASEURL_ERROR_INVALID_CHAR"           : "Caracteres especiais como '{0}' têm que ser %-codificados.",
-    "BASEURL_ERROR_UNKOWN_ERROR"           : "Erro desconhecido na análise do URL base",
+    "BASEURL_ERROR_UNKNOWN_ERROR"          : "Erro desconhecido na análise do URL base",
     
     
     // extensions/default/DebugCommands

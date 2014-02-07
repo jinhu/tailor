@@ -23,19 +23,13 @@
 
 
 /*jslint vars: true, plusplus: true, devel: true, nomen: true, indent: 4, maxerr: 50 */
-/*global define, $, brackets, PathUtils */
+/*global define, $, brackets */
 
-/*
- * Manages a collection of FileIndexes where each index maintains a list of information about
- * files that meet the criteria specified by the index. The indexes are created lazily when
- * they are queried and marked dirty when Brackets becomes active.
- *
- * TODO (issue 325 ) - FileIndexer doesn't currently add a file to the index when the user createa
- * a new file within brackets.
- *
+/**
+ * @deprecated
+ * This is a compatibility shim for legacy Brackets APIs that will be removed soon.
+ * Use ProjectManager.getAllFiles() instead.
  */
-
-
 define(function (require, exports, module) {
     "use strict";
     
@@ -261,174 +255,50 @@ define(function (require, exports, module) {
     }
     
     
-
-
-    
-    // debug 
-    function _logFileList(list) {
-        list.forEach(function (fileInfo) {
-            console.log(fileInfo.name);
-        });
-        console.log("length: " + list.length);
-    }
-    
-
-    /**
-     * Clears the fileInfo array for all the indexes in _indexList
-     * @private
-     */
-    function _clearIndexes() {
-        CollectionUtils.forEach(_indexList, function (index, indexName) {
-            index.fileInfos = [];
-        });
+    function _warn() {
+        console.error("Warning: FileIndexManager is deprecated. Use ProjectManager.getAllFiles() instead");
     }
 
-    /**
-     * Markes all file indexes dirty
-     */
-    function markDirty() {
-        _indexListDirty = true;
-    }
 
-    /**
-     * Used by syncFileIndex function to prevent reentrancy
-     * @private
-     */
-    var _ongoingSyncPromise = null;
-
-    /**
-     * Clears and rebuilds all of the fileIndexes and sets _indexListDirty to false
-     * @return {$.Promise} resolved when index has been updated
-     */
-    function syncFileIndex() {
-
-        // If we're already syncing, don't kick off a second one
-        if (_ongoingSyncPromise) {
-            return _ongoingSyncPromise;
-        }
-
-        var rootDir = ProjectManager.getProjectRoot();
-        if (_indexListDirty) {
-            PerfUtils.markStart(PerfUtils.FILE_INDEX_MANAGER_SYNC);
-
-            _clearIndexes();
-            
-            _ongoingSyncPromise = _scanDirectorySubTree(rootDir)
-                .done(function () {
-                    PerfUtils.addMeasurement(PerfUtils.FILE_INDEX_MANAGER_SYNC);
-                    _indexListDirty = false;
-                    _ongoingSyncPromise = null;
-
-                    //_logFileList(_indexList["all"].fileInfos);
-                    //_logFileList(_indexList["css"].fileInfos);
-                });
-            return _ongoingSyncPromise;
+    function _getFilter(indexName) {
+        if (indexName === "css") {
+            return ProjectManager.getLanguageFilter("css");
+        } else if (indexName === "all") {
+            return null;
         } else {
-            return $.Deferred().resolve().promise();
+            throw new Error("Invalid index name:", indexName);
         }
     }
-
+    
     /**
-     * Returns the FileInfo array for the specified index
+     * @deprecated
      * @param {!string} indexname
-     * @return {$.Promise} a promise that is resolved with an Array of FileInfo's
+     * @return {$.Promise} a promise that is resolved with an Array of File objects
      */
     function getFileInfoList(indexName) {
-        var result = new $.Deferred();
-
-        if (!_indexList.hasOwnProperty(indexName)) {
-            console.error("indexName not found");
-            return;
-        }
-
-        syncFileIndex()
-            .done(function () {
-                result.resolve(_indexList[indexName].fileInfos);
-            });
-
-        return result.promise();
+        _warn();
+        return ProjectManager.getAllFiles(_getFilter(indexName));
     }
     
     /**
-     * Calls the filterFunction on every in the index specified by indexName
-     * and return a a new list of FileInfo's
-     * @param {!string}
-     * @param {function({string})} filterFunction
-     * @return {$.Promise} a promise that is resolved with an Array of FileInfo's
-     */
-    function getFilteredList(indexName, filterFunction) {
-        var result = new $.Deferred();
-
-        if (!_indexList.hasOwnProperty(indexName)) {
-            console.error("indexName not found");
-            return;
-        }
-
-        syncFileIndex()
-            .done(function () {
-                var resultList = [];
-                getFileInfoList(indexName)
-                    .done(function (fileList) {
-                        resultList = fileList.filter(function (fileInfo) {
-                            return filterFunction(fileInfo.name);
-                        });
-
-                        result.resolve(resultList);
-                    });
-            });
-
-        return result.promise();
-    }
-    
-    /**
-     * returns an array of fileInfo's that match the filename parameter
+     * @deprecated
      * @param {!string} indexName
-     * @param {!filename}
-     * @return {$.Promise} a promise that is resolved with an Array of FileInfo's
+     * @param {!string} filename
+     * @return {$.Promise} a promise that is resolved with an Array of File objects
      */
     function getFilenameMatches(indexName, filename) {
-        return getFilteredList(indexName, function (item) {
-            return item === filename;
+        _warn();
+        
+        var indexFilter = _getFilter(indexName);
+        
+        return ProjectManager.getAllFiles(function (file) {
+            if (indexFilter && !indexFilter(file)) {
+                return false;
+            }
+            return file.name === filename;
         });
     }
     
-    /**
-     * Add the indexes
-     */
-
-    _addIndex(
-        "all",
-        function (entry) {
-            return true;
-        }
-    );
-
-    _addIndex(
-        "css",
-        function (entry) {
-            var filename = entry.name;
-            return PathUtils.filenameExtension(filename) === ".css";
-        }
-    );
-
-    /**
-     * When a new project is opened set the flag for index exceeding maximum
-     * warning back to false. 
-     */
-    $(ProjectManager).on("projectOpen", function (event, projectRoot) {
-        _maxFileDialogDisplayed = false;
-        markDirty();
-    });
-    
-    $(ProjectManager).on("projectFilesChange", function (event, projectRoot) {
-        markDirty();
-    });
-
-    PerfUtils.createPerfMeasurement("FILE_INDEX_MANAGER_SYNC", "syncFileIndex");
-
-    exports.markDirty = markDirty;
     exports.getFileInfoList = getFileInfoList;
     exports.getFilenameMatches = getFilenameMatches;
-
-
 });

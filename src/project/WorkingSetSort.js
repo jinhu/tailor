@@ -1,24 +1,24 @@
 /*
  * Copyright (c) 2012 Adobe Systems Incorporated. All rights reserved.
- *  
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"), 
- * to deal in the Software without restriction, including without limitation 
- * the rights to use, copy, modify, merge, publish, distribute, sublicense, 
- * and/or sell copies of the Software, and to permit persons to whom the 
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- *  
+ *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- *  
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING 
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER 
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
- * 
+ *
  */
 
 
@@ -35,6 +35,7 @@ define(function (require, exports, module) {
         CommandManager          = require("command/CommandManager"),
         DocumentManager         = require("document/DocumentManager"),
         PreferencesManager      = require("preferences/PreferencesManager"),
+        FileUtils               = require("file/FileUtils"),
         AppInit                 = require("utils/AppInit"),
         Strings                 = require("strings");
     
@@ -173,7 +174,7 @@ define(function (require, exports, module) {
      * @private
      *
      * @param {string} commandID A valid command identifier.
-     * @param {function(FileEntry, FileEntry): number} compareFn A valid sort
+     * @param {function(File, File): number} compareFn A valid sort
      *      function (see register for a longer explanation).
      * @param {string} events Space-separated DocumentManager possible events
      *      ending with ".sort".
@@ -189,7 +190,7 @@ define(function (require, exports, module) {
         return this._commandID;
     };
     
-    /** @return {function(FileEntry, FileEntry): number} The compare function */
+    /** @return {function(File, File): number} The compare function */
     Sort.prototype.getCompareFn = function () {
         return this._compareFn;
     };
@@ -222,7 +223,7 @@ define(function (require, exports, module) {
     /**
      * Registers a working set sort method.
      * @param {(string|Command)} command A command ID or a command object
-     * @param {function(FileEntry, FileEntry): number} compareFn The function that
+     * @param {function(File, File): number} compareFn The function that
      *      will be used inside JavaScript's sort function. The return a value
      *      should be >0 (sort a to a lower index than b), =0 (leaves a and b
      *      unchanged with respect to each other) or <0 (sort b to a lower index
@@ -292,6 +293,7 @@ define(function (require, exports, module) {
         function (file1, file2) {
             var index1 = DocumentManager.findInWorkingSetAddedOrder(file1.fullPath),
                 index2 = DocumentManager.findInWorkingSetAddedOrder(file2.fullPath);
+            
             return index1 - index2;
         },
         "workingSetAdd workingSetAddList"
@@ -299,22 +301,14 @@ define(function (require, exports, module) {
     register(
         Commands.SORT_WORKINGSET_BY_NAME,
         function (file1, file2) {
-            return file1.name.toLocaleLowerCase().localeCompare(file2.name.toLocaleLowerCase());
+            return FileUtils.compareFilenames(file1.name, file2.name, false);
         },
         "workingSetAdd workingSetAddList"
     );
     register(
         Commands.SORT_WORKINGSET_BY_TYPE,
         function (file1, file2) {
-            var ext1 = file1.name.split('.').pop(),
-                ext2 = file2.name.split('.').pop(),
-                cmp  = ext1.localeCompare(ext2);
-            
-            if (cmp === 0) {
-                return file1.name.toLocaleLowerCase().localeCompare(file2.name.toLocaleLowerCase());
-            } else {
-                return cmp;
-            }
+            return FileUtils.compareFilenames(file1.name, file2.name, true);
         },
         "workingSetAdd workingSetAddList"
     );
@@ -329,8 +323,6 @@ define(function (require, exports, module) {
     
     // Initialize PreferenceStorage
     _prefs = PreferencesManager.getPreferenceStorage(module, defaultPrefs);
-    //TODO: Remove preferences migration code
-    PreferencesManager.handleClientIdChange(_prefs, "com.adobe.brackets.WorkingSetSort");
     
     // Initialize items dependent on extensions/workingSet
     AppInit.appReady(function () {

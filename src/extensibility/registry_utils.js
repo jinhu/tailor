@@ -74,7 +74,7 @@ define(function (require, exports, module) {
         var friendlyName;
         if (this.owner) {
             var nameComponents = this.owner.split(":");
-            friendlyName = nameComponents[1] + " (" + nameComponents[0] + ")";
+            friendlyName = nameComponents[1];
         }
         return friendlyName;
     };
@@ -105,14 +105,12 @@ define(function (require, exports, module) {
             ownerLink = exports.ownerLink.call(this),
             userId = exports.formatUserId.call(this);
         if (this.metadata && this.metadata.author) {
-            // author can be either a string or an object with a "name" field
-            result += htmlEscape(this.metadata.author.name || this.metadata.author);
+            result = htmlEscape(this.metadata.author.name || this.metadata.author);
+        } else if (userId) {
+            result = htmlEscape(userId);
         }
-        if (userId) {
-            if (result !== "") {
-                result += " / ";
-            }
-            result += "<a href='" + htmlEscape(ownerLink) + "'>" + htmlEscape(userId) + "</a>";
+        if (ownerLink) {
+            result = "<a href='" + htmlEscape(ownerLink) + "' title='" + htmlEscape(ownerLink) + "'>" + result + "</a>";
         }
         return result;
     };
@@ -126,7 +124,11 @@ define(function (require, exports, module) {
      */
     exports.sortRegistry = function (registry, subkey) {
         function getPublishTime(entry) {
-            return new Date(entry.versions[entry.versions.length - 1].published).getTime();
+            if (entry.versions) {
+                return new Date(entry.versions[entry.versions.length - 1].published).getTime();
+            }
+            
+            return Number.NEGATIVE_INFINITY;
         }
         
         var sortedEntries = [];
@@ -136,8 +138,8 @@ define(function (require, exports, module) {
             sortedEntries.push(registry[key]);
         });
         sortedEntries.sort(function (entry1, entry2) {
-            return getPublishTime(subkey ? entry2[subkey] : entry2) -
-                getPublishTime(subkey ? entry1[subkey] : entry1);
+            return getPublishTime((subkey && entry2[subkey]) || entry2) -
+                getPublishTime((subkey && entry1[subkey]) || entry1);
         });
         
         return sortedEntries;

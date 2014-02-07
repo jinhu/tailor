@@ -31,9 +31,10 @@ define(function (require, exports, module) {
     var main            = require("main"),
         NodeConnection  = brackets.getModule("utils/NodeConnection"),
         FileUtils       = brackets.getModule("file/FileUtils"),
-        SpecRunnerUtils = brackets.getModule("spec/SpecRunnerUtils");
+        SpecRunnerUtils = brackets.getModule("spec/SpecRunnerUtils"),
+        StaticServer    = require("StaticServer");
     
-    var testFolder     = FileUtils.getNativeModuleDirectoryPath(module) + "/unittest-files/";
+    var testFolder     = FileUtils.getNativeModuleDirectoryPath(module) + "/unittest-files";
     
     var CONNECT_TIMEOUT = 20000;
     
@@ -52,6 +53,7 @@ define(function (require, exports, module) {
         // Unit tests for the underlying node server.
         describe("StaticServerDomain", function () {
             var nodeConnection,
+                nodeDomain,
                 logs;
             
             beforeEach(function () {
@@ -60,11 +62,10 @@ define(function (require, exports, module) {
                 if (!nodeConnection) {
                     runs(function () {
                         // wait for StaticServer/main to connect and load the StaticServerDomain
-                        main.init().done(function (conn) {
-                            nodeConnection = conn;
-                        });
+                        nodeDomain = main._nodeDomain;
+                        nodeConnection = nodeDomain.connection;
 
-                        waitsFor(function () { return nodeConnection; }, "NodeConnection connected", CONNECT_TIMEOUT);
+                        waitsFor(function () { return nodeDomain.ready(); }, "NodeConnection connected", CONNECT_TIMEOUT);
                     });
 
                     runs(function () {
@@ -90,7 +91,7 @@ define(function (require, exports, module) {
             }
             
             it("should start a static server on the given folder", function () {
-                var serverInfo, path = testFolder + "folder1";
+                var serverInfo, path = testFolder + "/folder1";
                 runs(function () {
                     nodeConnection.domains.staticServer.getServer(path)
                         .done(function (info) {
@@ -110,7 +111,7 @@ define(function (require, exports, module) {
             });
             
             it("should serve the text of a file in the given folder", function () {
-                var serverInfo, text, path = testFolder + "folder1";
+                var serverInfo, text, path = testFolder + "/folder1";
                 runs(function () {
                     nodeConnection.domains.staticServer.getServer(path)
                         .done(function (info) {
@@ -138,7 +139,7 @@ define(function (require, exports, module) {
             
             it("should create separate servers for different folders", function () {
                 var serverInfo1, serverInfo2,
-                    path1 = testFolder + "folder1", path2 = testFolder + "folder2";
+                    path1 = testFolder + "/folder1", path2 = testFolder + "/folder2";
                 runs(function () {
                     nodeConnection.domains.staticServer.getServer(path1)
                         .done(function (info) {
@@ -164,7 +165,7 @@ define(function (require, exports, module) {
             
             it("should keep a previous server alive after creating a new server", function () {
                 var serverInfo1, serverInfo2,
-                    path1 = testFolder + "folder1", path2 = testFolder + "folder2",
+                    path1 = testFolder + "/folder1", path2 = testFolder + "/folder2",
                     text1, text2;
                 runs(function () {
                     nodeConnection.domains.staticServer.getServer(path1)
@@ -203,10 +204,11 @@ define(function (require, exports, module) {
             
             it("should trigger an event when a file path is requested", function () {
                 var serverInfo,
-                    path = testFolder + "folder1",
+                    path = testFolder + "/folder1",
                     text,
                     location,
                     elapsed,
+                    requestId,
                     timeout = 500;
                 
                 runs(function () {
@@ -221,6 +223,7 @@ define(function (require, exports, module) {
                 runs(function () {
                     onRequestFilter(function (request) {
                         location = request.location;
+                        requestId = request.id;
                         // Do not call writeFilteredResponse in order to hit timeout
                     });
                     
@@ -245,6 +248,7 @@ define(function (require, exports, module) {
                 waitsFor(function () { return location && text; }, "waiting for request event to fire");
 
                 runs(function () {
+                    expect(requestId).toBeGreaterThan(-1);
                     expect(location.pathname).toBe("/index.txt");
                     expect(text).toBe("This is a file in folder 1.");
 
@@ -258,9 +262,10 @@ define(function (require, exports, module) {
             
             it("should send static file contents after canceling a filter request", function () {
                 var serverInfo,
-                    path = testFolder + "folder1",
+                    path = testFolder + "/folder1",
                     text,
-                    location;
+                    location,
+                    requestId;
                 
                 runs(function () {
                     nodeConnection.domains.staticServer.getServer(path)
@@ -275,10 +280,11 @@ define(function (require, exports, module) {
                     // listen for request event
                     onRequestFilter(function (request) {
                         location = request.location;
-                        nodeConnection.domains.staticServer.writeFilteredResponse(request.root, request.pathname, null);
+                        requestId = request.id;
+                        nodeConnection.domains.staticServer.writeFilteredResponse(request.root, request.pathname, {id: requestId});
 
                         // a second call to send does nothing
-                        nodeConnection.domains.staticServer.writeFilteredResponse(request.root, request.pathname, {body: "custom response"});
+                        nodeConnection.domains.staticServer.writeFilteredResponse(request.root, request.pathname, {id : requestId, body: "custom response"});
                     });
                     
                     // listen for /index.txt requests
@@ -295,6 +301,7 @@ define(function (require, exports, module) {
                 waitsFor(function () { return location && text; }, "waiting for request event to fire");
 
                 runs(function () {
+                    expect(requestId).toBeGreaterThan(-1);
                     expect(location.pathname).toBe("/index.txt");
                     expect(text).toBe("This is a file in folder 1.");
                     
@@ -305,9 +312,10 @@ define(function (require, exports, module) {
             
             it("should override the static file server response with a new response body", function () {
                 var serverInfo,
-                    path = testFolder + "folder1",
+                    path = testFolder + "/folder1",
                     text,
-                    location;
+                    location,
+                    requestId;
                 
                 runs(function () {
                     nodeConnection.domains.staticServer.getServer(path)
@@ -322,7 +330,8 @@ define(function (require, exports, module) {
                     // listen for request event
                     onRequestFilter(function (request) {
                         location = request.location;
-                        nodeConnection.domains.staticServer.writeFilteredResponse(location.root, location.pathname, {body: "custom response"});
+                        requestId = request.id;
+                        nodeConnection.domains.staticServer.writeFilteredResponse(location.root, location.pathname, {id: requestId, body: "custom response"});
                     });
                     
                     // listen for /index.txt requests
@@ -339,6 +348,7 @@ define(function (require, exports, module) {
                 waitsFor(function () { return location && text; }, "waiting for text from server");
 
                 runs(function () {
+                    expect(requestId).toBeGreaterThan(-1);
                     expect(location.pathname).toBe("/index.txt");
                     expect(text).toBe("custom response");
                     
@@ -349,9 +359,10 @@ define(function (require, exports, module) {
             
             it("should ignore multiple responses for the same request", function () {
                 var serverInfo,
-                    path = testFolder + "folder1",
+                    path = testFolder + "/folder1",
                     text,
-                    location;
+                    location,
+                    requestId;
                 
                 runs(function () {
                     nodeConnection.domains.staticServer.getServer(path)
@@ -366,9 +377,10 @@ define(function (require, exports, module) {
                     // listen for request event
                     onRequestFilter(function (request) {
                         location = request.location;
+                        requestId = request.id;
 
-                        nodeConnection.domains.staticServer.writeFilteredResponse(location.root, location.pathname, {body: "good response"});
-                        nodeConnection.domains.staticServer.writeFilteredResponse(location.root, location.pathname, {body: "bad response"});
+                        nodeConnection.domains.staticServer.writeFilteredResponse(location.root, location.pathname, {id: requestId, body: "good response"});
+                        nodeConnection.domains.staticServer.writeFilteredResponse(location.root, location.pathname, {id: requestId, body: "bad response"});
                     });
                     
                     // listen for /index.txt requests
@@ -392,6 +404,7 @@ define(function (require, exports, module) {
                     expect(logs[0].level).toBe("warn");
                     expect(logs[0].message.indexOf("writeFilteredResponse")).toBe(0);
 
+                    expect(requestId).toBeGreaterThan(-1);
                     expect(location.pathname).toBe("/index.txt");
                     expect(text).toBe("good response");
                     
@@ -403,11 +416,15 @@ define(function (require, exports, module) {
             
             it("should log a warning when writing to a non-existant request", function () {
                 var serverInfo,
-                    path = testFolder + "folder1",
+                    path = testFolder + "/folder1",
                     text,
-                    location;
+                    requestId = -1;
                 
                 spyOn(console, "warn").andCallThrough();
+                
+                onRequestFilter(function (request) {
+                    requestId = request.id;
+                });
                 
                 runs(function () {
                     nodeConnection.domains.staticServer.getServer(path)
@@ -420,7 +437,7 @@ define(function (require, exports, module) {
                 
                 runs(function () {
                     // write response before the request
-                    waitsForDone(nodeConnection.domains.staticServer.writeFilteredResponse(path, "/index.txt", {body: "custom response"}));
+                    waitsForDone(nodeConnection.domains.staticServer.writeFilteredResponse(path, "/index.txt", {id: requestId, body: "custom response"}));
                 });
 
                 runs(function () {
@@ -432,7 +449,7 @@ define(function (require, exports, module) {
                 
                 runs(function () {
                     // write response after the request
-                    waitsForDone(nodeConnection.domains.staticServer.writeFilteredResponse(path, "/index.txt", {body: "custom response"}));
+                    waitsForDone(nodeConnection.domains.staticServer.writeFilteredResponse(path, "/index.txt", {id: requestId, body: "custom response"}));
                 });
                 
                 waitsFor(function () { return text; }, "waiting for text from server");
@@ -451,6 +468,7 @@ define(function (require, exports, module) {
 
                     // verify original file content
                     expect(text).toBe("This is a file in folder 1.");
+                    expect(requestId).toBe(-1);
                     
                     // cleanup
                     waitsForDone(nodeConnection.domains.staticServer.closeServer(path),
@@ -460,9 +478,10 @@ define(function (require, exports, module) {
             
             it("should should require paths to be filtered for events to fire", function () {
                 var serverInfo,
-                    path = testFolder + "folder1",
+                    path = testFolder + "/folder1",
                     text = null,
                     location = null,
+                    requestId = -1,
                     elapsed,
                     timeout = 500;
                 
@@ -478,6 +497,7 @@ define(function (require, exports, module) {
                 runs(function () {
                     onRequestFilter(function (request) {
                         location = request.location;
+                        requestId = request.id;
                     });
 
                     // set a custom timeout
@@ -506,6 +526,7 @@ define(function (require, exports, module) {
 
                     // server should respond with original content before the timeout lapses
                     expect(elapsed).toBeLessThan(timeout);
+                    expect(requestId).toBe(-1);
                     
                     waitsForDone(nodeConnection.domains.staticServer.closeServer(path),
                                  "waiting for static server to close");
@@ -514,103 +535,72 @@ define(function (require, exports, module) {
         });
         
         // Unit tests for the StaticServerProvider that wraps the underlying node server.
-        describe("StaticServerProvider", function () {
-            var brackets,
-                ProjectManager,
-                extensionRequire,
-                StaticServer;
-            
-            beforeEach(function () {
-                var ExtensionLoader;
+        describe("StaticServer", function () {
+            var projectPath         = testFolder + "/",
+                mockNodeDomain      = { ready: function () { return true; } },
+                pathResolver        = function (path) {
+                    if (path.indexOf(projectPath) === 0) {
+                        return path.slice(projectPath.length);
+                    }
 
-                runs(function () {
-                    SpecRunnerUtils.createTestWindowAndRun(this, function (testWindow) {
-                        // Load module instances from brackets.test
-                        brackets            = testWindow.brackets;
-                        ProjectManager      = testWindow.brackets.test.ProjectManager;
-                        extensionRequire    = brackets.test.ExtensionLoader.getRequireContextForExtension("StaticServer");
-                        StaticServer        = extensionRequire("main");
-                    });
-                });
-                
-                runs(function () {
-                    waitsForDone(StaticServer._getNodeConnectionDeferred(), "connecting to node server", CONNECT_TIMEOUT);
-                });
+                    return path;
+                },
+                config              = {
+                    baseUrl: "http://localhost/",
+                    nodeDomain: mockNodeDomain,
+                    pathResolver: pathResolver,
+                    root: projectPath
+                };
+
+            it("should translate local paths to server paths", function () {
+                var outsidePath     = testFolder.substr(0, testFolder.lastIndexOf("/") + 1),
+                    fileProtocol    = (brackets.platform === "win") ? "file:///" : "file://",
+                    fileRelPath     = "subdir/index.html",
+                    file1Path       = projectPath + fileRelPath,
+                    file2Path       = outsidePath + fileRelPath,
+                    file1FileUrl    = encodeURI(fileProtocol + projectPath + fileRelPath),
+                    file2FileUrl    = encodeURI(fileProtocol + outsidePath + fileRelPath),
+                    file1ServerUrl  = config.baseUrl + encodeURI(fileRelPath),
+                    server          = new StaticServer(config);
+
+                // Should use server url with base url
+                expect(server.pathToUrl(file1Path)).toBe(file1ServerUrl);
+                expect(server.urlToPath(file1ServerUrl)).toBe(file1Path);
+
+                // File outside project should still use file url
+                expect(server.pathToUrl(file2Path)).toBe(null);
+                expect(server.urlToPath(file2FileUrl)).toBe(null);
             });
 
-            afterEach(function () {
-                SpecRunnerUtils.closeTestWindow();
-            });
-            
-            
-            it("should have initialized the static server provider immediately after launch", function () {
-                // Note: the goal is to test this as quickly as possible. We can't
-                // actually test immediately when appReady fires because that happens
-                // asynchronously in our test window. But we know this will run shortly
-                // after appReady fires. There's no way to test it synchronously
-                // because appReady is the event that gives us access to StaticServer in
-                // the test window.
-                expect(StaticServer._getStaticServerProvider()).toBeTruthy();
-            });
-            
-            
             it("should only serve html files that are in the project file hierarchy", function () {
-                waitsForDone(ProjectManager.openProject(testFolder), "opens test folder in ProjectManager");
+                var server = new StaticServer(config);
+
+                // should not serve files outside project hierarchy
+                expect(server.canServe("/foo.html")).toBe(false);
                 
-                runs(function () {
-                    var provider = StaticServer._getStaticServerProvider();
+                // should not serve non-HTML files inside hierarchy
+                expect(server.canServe(testFolder + "/foo.jpg")).toBe(false);
 
-                    // should not serve files outside project hierarchy
-                    expect(provider.canServe("/foo.html")).toBe(false);
-                    
-                    // should not serve non-HTML files inside hierarchy
-                    expect(provider.canServe(testFolder + "foo.jpg")).toBe(false);
+                // should serve .htm files inside hierarchy
+                expect(server.canServe(testFolder + "/foo.htm")).toBe(true);
 
-                    // should serve .htm files inside hierarchy
-                    expect(provider.canServe(testFolder + "foo.htm")).toBe(true);
+                // should serve .html files inside hierarchy
+                expect(server.canServe(testFolder + "/foo.html")).toBe(true);
 
-                    // should serve .html files inside hierarchy
-                    expect(provider.canServe(testFolder + "foo.html")).toBe(true);
+                // should serve .HTML files inside hierarchy
+                expect(server.canServe(testFolder + "/foo.HTML")).toBe(true);
 
-                    // should serve .HTML files inside hierarchy
-                    expect(provider.canServe(testFolder + "foo.HTML")).toBe(true);
-
-                    // should serve root of hierarchy
-                    expect(provider.canServe(testFolder)).toBe(true);
-                    
-                });
-                
-            });
-
-            it("should be ready to serve a file in the project and return an appropriate baseUrl", function () {
-                waitsForDone(ProjectManager.openProject(testFolder), "opens test folder in ProjectManager");
-                
-                waitsForDone(StaticServer._getStaticServerProvider().readyToServe(), "being ready to serve");
-                    
-                runs(function () {
-                    var baseUrl = StaticServer._getStaticServerProvider().getBaseUrl();
-                    var parsedUrl = LOCALHOST_PORT_PARSER_RE.exec(baseUrl);
-                    expect(parsedUrl).toBeTruthy();
-                    expect(parsedUrl.length).toBe(2);
-                    expect(Number(parsedUrl[1])).toBeGreaterThan(0);
-                });
+                // should serve root of hierarchy
+                expect(server.canServe(testFolder + "/")).toBe(true);
             });
             
             it("should decline serving if not connected to node", function () {
-                var nodeConnectionDeferred;
-                runs(function () {
-                    nodeConnectionDeferred = StaticServer._getNodeConnectionDeferred();
-                    waitsForDone(nodeConnectionDeferred, "connecting to node server", CONNECT_TIMEOUT);
-                });
+                // mock NodeConnection state to be disconnected
+                config.nodeDomain = { ready: function () { return false; } };
 
-                runs(function () {
-                    nodeConnectionDeferred.done(function (nodeConnection) {
-                        // this will be run synchronously because of the waitsFor above
-                        nodeConnection.disconnect();
-                    });
-                    expect(StaticServer._getStaticServerProvider().canServe(testFolder + "foo.html")).toBe(false);
-                });
-                
+                var server = new StaticServer(config);
+
+                expect(server.canServe(testFolder + "foo.html")).toBe(false);
             });
             
         });

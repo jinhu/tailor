@@ -22,25 +22,27 @@
  */
 
 /*jslint vars: true, plusplus: true, devel: true, browser: true, nomen: true, indent: 4, maxerr: 50, regexp: true */
-/*global define, describe, it, xit, expect, beforeEach, afterEach, waitsFor, runs, $, brackets, waitsForDone */
+/*global define, describe, it, xit, expect, beforeEach, afterEach, waitsFor, runs, $, brackets, waitsForDone, beforeFirst, afterLast, spyOn */
 
 define(function (require, exports, module) {
     "use strict";
 
-    var Commands            = brackets.getModule("command/Commands"),
-        CommandManager      = brackets.getModule("command/CommandManager"),
-        DocumentManager     = brackets.getModule("document/DocumentManager"),
-        Editor              = brackets.getModule("editor/Editor").Editor,
-        EditorManager       = brackets.getModule("editor/EditorManager"),
-        FileUtils           = brackets.getModule("file/FileUtils"),
-        NativeFileSystem    = brackets.getModule("file/NativeFileSystem").NativeFileSystem,
-        SpecRunnerUtils     = brackets.getModule("spec/SpecRunnerUtils"),
-        UnitTestReporter    = brackets.getModule("test/UnitTestReporter"),
-        JSCodeHints         = require("main"),
-        Preferences         = require("Preferences"),
-        ScopeManager        = require("ScopeManager"),
-        HintUtils           = require("HintUtils");
-
+    var Commands             = brackets.getModule("command/Commands"),
+        CommandManager       = brackets.getModule("command/CommandManager"),
+        DocumentManager      = brackets.getModule("document/DocumentManager"),
+        Editor               = brackets.getModule("editor/Editor").Editor,
+        EditorManager        = brackets.getModule("editor/EditorManager"),
+        FileSystem           = brackets.getModule("filesystem/FileSystem"),
+        FileUtils            = brackets.getModule("file/FileUtils"),
+        SpecRunnerUtils      = brackets.getModule("spec/SpecRunnerUtils"),
+        UnitTestReporter     = brackets.getModule("test/UnitTestReporter"),
+        JSCodeHints          = require("main"),
+        Preferences          = require("Preferences"),
+        ScopeManager         = require("ScopeManager"),
+        HintUtils            = require("HintUtils"),
+        HintUtils2           = require("HintUtils2"),
+        ParameterHintManager = require("ParameterHintManager");
+    
     var extensionPath   = FileUtils.getNativeModuleDirectoryPath(module),
         testPath        = extensionPath + "/unittest-files/basic-test-files/file1.js",
         testHtmlPath    = extensionPath + "/unittest-files/basic-test-files/index.html",
@@ -55,18 +57,7 @@ define(function (require, exports, module) {
         });
     });
     
-    /**
-     * Returns an Editor suitable for use in isolation, given a Document.
-     *
-     * @param {Document} doc - the document to be contained by the new Editor
-     * @return {Editor} - the mock editor object
-     */
-    function createMockEditor(doc) {
-        return SpecRunnerUtils.createMockEditorForDocument(doc);
-    }
-
     describe("JavaScript Code Hinting", function () {
-
         /*
          * Ask provider for hints at current cursor position; expect it to
          * return some
@@ -153,6 +144,7 @@ define(function (require, exports, module) {
 
             runs(function () { callback(hintList); });
         }
+
         /*
          * Test if hints should be closed or not closed at a given position.
          *
@@ -182,7 +174,7 @@ define(function (require, exports, module) {
          */
         function hintsAbsent(hintObj, absentHints) {
             _waitForHints(hintObj, function (hintList) {
-                expect(hintList).not.toBeNull();
+                expect(hintList).toBeTruthy();
                 absentHints.forEach(function (absentHint) {
                     expect(_indexOf(hintList, absentHint)).toBe(-1);
                 });
@@ -200,7 +192,7 @@ define(function (require, exports, module) {
          */
         function hintsPresent(hintObj, expectedHints) {
             _waitForHints(hintObj, function (hintList) {
-                expect(hintList).not.toBeNull();
+                expect(hintList).toBeTruthy();
                 expectedHints.forEach(function (expectedHint) {
                     expect(_indexOf(hintList, expectedHint)).not.toBe(-1);
                 });
@@ -221,7 +213,7 @@ define(function (require, exports, module) {
                 currIndex;
             
             _waitForHints(hintObj, function (hintList) {
-                expect(hintList).not.toBeNull();
+                expect(hintList).toBeTruthy();
                 expectedHints.forEach(function (expectedHint) {
                     currIndex = _indexOf(hintList, expectedHint);
                     expect(currIndex).toBeGreaterThan(prevIndex);
@@ -241,7 +233,7 @@ define(function (require, exports, module) {
          */
         function hintsPresentExact(hintObj, expectedHints) {
             _waitForHints(hintObj, function (hintList) {
-                expect(hintList).not.toBeNull();
+                expect(hintList).toBeTruthy();
                 expect(hintList.length).toBe(expectedHints.length);
                 expectedHints.forEach(function (expectedHint, index) {
                     expect(hintList[index].data("token").value).toBe(expectedHint);
@@ -279,9 +271,9 @@ define(function (require, exports, module) {
         function selectHint(provider, hintObj, hintSelection) {
             var hintList = expectHints(provider);
             _waitForHints(hintObj, function (hintList) {
-                expect(hintList).not.toBeNull();
+                expect(hintList).toBeTruthy();
                 var index = findHint(hintList, hintSelection);
-                expect(hintList[index].data("token")).not.toBeNull();
+                expect(hintList[index].data("token")).toBeTruthy();
                 expect(provider.insertHint(hintList[index])).toBe(false);
             });
         }
@@ -338,7 +330,91 @@ define(function (require, exports, module) {
             
         }
 
-        function setupTest(path, primePump) {
+        /**
+         * Verify there is no parameter hint at the current cursor.
+         */
+        function expectNoParameterHint() {
+            expect(ParameterHintManager.popUpHint()).toBe(null);
+        }
+
+        /**
+         * Verify the parameter hint is not visible.
+         */
+        function expectParameterHintClosed() {
+            expect(ParameterHintManager.isHintDisplayed()).toBe(false);
+        }
+
+        /*
+         * Wait for a hint response object to resolve, then apply a callback
+         * to the result
+         *
+         * @param {Object + jQuery.Deferred} hintObj - a hint response object,
+         *      possibly deferred
+         * @param {Function} callback - the callback to apply to the resolved
+         *      hint response object
+         */
+        function _waitForParameterHint(hintObj, callback) {
+            var complete = false,
+                hint = null;
+
+            hintObj.done(function () {
+                hint = JSCodeHints.getSession().getParameterHint();
+                complete = true;
+            });
+
+            waitsFor(function () {
+                return complete;
+            }, "Expected parameter hint did not resolve", 3000);
+
+            runs(function () { callback(hint); });
+        }
+
+        /**
+         * Show a function hint based on the code at the cursor. Verify the
+         * hint matches the passed in value.
+         *
+         * @param {Array<{name: string, type: string, isOptional: boolean}>}
+         * expectedParams - array of records, where each element of the array
+         * describes a function parameter. If null, then no hint is expected.
+         * @param {number} expectedParameter - the parameter at cursor.
+         */
+        function expectParameterHint(expectedParams, expectedParameter) {
+            var request = ParameterHintManager.popUpHint();
+            if (expectedParams === null) {
+                expect(request).toBe(null);
+                return;
+            }
+
+            function expectHint(hint) {
+                var params = hint.parameters,
+                    n = params.length,
+                    i;
+
+                // compare params to expected params
+                expect(params.length).toBe(expectedParams.length);
+                expect(hint.currentIndex).toBe(expectedParameter);
+
+                for (i = 0; i < n; i++) {
+
+                    expect(params[i].name).toBe(expectedParams[i].name);
+                    expect(params[i].type).toBe(expectedParams[i].type);
+                    if (params[i].isOptional) {
+                        expect(expectedParams[i].isOptional).toBeTruthy();
+                    } else {
+                        expect(expectedParams[i].isOptional).toBeFalsy();
+                    }
+                }
+
+            }
+
+            if (request) {
+                _waitForParameterHint(request, expectHint);
+            } else {
+                expectHint(JSCodeHints.getSession().getParameterHint());
+            }
+        }
+
+        function setupTest(path, primePump) { // FIXME: primePump argument ignored even though used below
             DocumentManager.getDocumentForPath(path).done(function (doc) {
                 testDoc = doc;
             });
@@ -349,8 +425,10 @@ define(function (require, exports, module) {
 
             // create Editor instance (containing a CodeMirror instance)
             runs(function () {
-                testEditor = createMockEditor(testDoc);
+                testEditor = SpecRunnerUtils.createMockEditorForDocument(testDoc);
                 preTestText = testDoc.getText();
+                waitsForDone(ScopeManager._readyPromise());
+                waitsForDone(ScopeManager._maybeReset(JSCodeHints.getSession(), testDoc, true));
             });
         }
 
@@ -368,7 +446,18 @@ define(function (require, exports, module) {
         }
 
         describe("JavaScript Code Hinting Basic", function () {
-
+            beforeFirst(function () {
+                brackets._configureJSCodeHints({
+                    noReset: true
+                });
+            });
+            
+            afterLast(function () {
+                brackets._configureJSCodeHints({
+                    noReset: false
+                });
+            });
+            
             beforeEach(function () {
                 setupTest(testPath, false);
             });
@@ -400,19 +489,19 @@ define(function (require, exports, module) {
                 var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 hintsPresent(hintObj, ["break", "case", "catch"]);
             });
-/*            
-            it("should list explicitly defined globals from JSLint annotations", function () {
+
+            xit("should list explicitly defined globals from JSLint annotations", function () {
                 testEditor.setCursorPos({ line: 6, ch: 0 });
                 var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 hintsPresent(hintObj, ["brackets", "$"]);
             });
             
-            it("should list implicitly defined globals from JSLint annotations", function () {
+            xit("should list implicitly defined globals from JSLint annotations", function () {
                 testEditor.setCursorPos({ line: 6, ch: 0 });
                 var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 hintsPresent(hintObj, ["alert", "console", "confirm", "navigator", "window", "frames"]);
             });
- */
+ 
             it("should NOT list implicitly defined globals from missing JSLint annotations", function () {
                 testEditor.setCursorPos({ line: 6, ch: 0 });
                 var hintObj = expectHints(JSCodeHints.jsHintProvider);
@@ -460,13 +549,13 @@ define(function (require, exports, module) {
                 var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 hintsPresent(hintObj, ["B1", "B2", "funC", "paramB1", "paramB2", "funB", "A1", "A2", "A3"]);
             });
-/*
-            it("should list string literals that occur in the file", function () {
+
+            xit("should list string literals that occur in the file", function () {
                 testEditor.setCursorPos({ line: 12, ch: 0 });
                 var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 hintsPresent(hintObj, ["use strict"]);
             });
-*/
+
             it("should NOT list string literals from other files", function () {
                 testEditor.setCursorPos({ line: 6, ch: 0 });
                 var hintObj = expectHints(JSCodeHints.jsHintProvider);
@@ -563,18 +652,6 @@ define(function (require, exports, module) {
                 hintsPresent(hintObj, ["B1", "paramB1"]);
             });
 
-/*          Single quote and double quote keys cause hasHints() to return false.
-            It used to return true when string literals were supported.
-            it("should list implicit hints when typing string literals (single quote)", function () {
-                testEditor.setCursorPos({ line: 9, ch: 0 });
-                expectHints(JSCodeHints.jsHintProvider, "'");
-            });
-            
-            it("should list implicit hints when typing string literals (double quote)", function () {
-                testEditor.setCursorPos({ line: 9, ch: 0 });
-                expectHints(JSCodeHints.jsHintProvider, "\"");
-            });
-*/
             it("should give priority to identifier names associated with the current context", function () {
                 testEditor.setCursorPos({ line: 16, ch: 0 });
                 var hintObj = expectHints(JSCodeHints.jsHintProvider);
@@ -591,7 +668,7 @@ define(function (require, exports, module) {
                 hintsPresentOrdered(hintObj, ["funB", "funE"]);
             });
             
-/*            it("should choose the correct delimiter for string literal hints with no query", function () {
+            xit("should choose the correct delimiter for string literal hints with no query", function () {
                 var start = { line: 18, ch: 0 },
                     end   = { line: 18, ch: 18 };
 
@@ -603,7 +680,7 @@ define(function (require, exports, module) {
                     expect(testDoc.getRange(start, end)).toEqual('"hello\\\\\\" world!"');
                 });
             });
-*/
+            
             it("should insert value hints with no current query", function () {
                 var start = { line: 6, ch: 0 },
                     end   = { line: 6, ch: 2 };
@@ -636,7 +713,7 @@ define(function (require, exports, module) {
                 var start   = { line: 6, ch: 0 },
                     middle  = { line: 6, ch: 3 },
                     end     = { line: 6, ch: 8 };
-
+                
                 testDoc.replaceRange("A1.", start, start);
                 testEditor.setCursorPos(middle);
                 var hintObj = expectHints(JSCodeHints.jsHintProvider);
@@ -654,7 +731,7 @@ define(function (require, exports, module) {
                     middle  = { line: 6, ch: 3 },
                     end     = { line: 6, ch: 8 },
                     endplus = { line: 6, ch: 12 };
-
+                
                 testDoc.replaceRange("A1.prop", start, start);
                 testEditor.setCursorPos(middle);
                 var hintObj = expectHints(JSCodeHints.jsHintProvider);
@@ -732,14 +809,14 @@ define(function (require, exports, module) {
             });
 
             it("should list function type", function () {
-                var start = { line: 36, ch: 0 },
-                    middle = { line: 36, ch: 5 };
+                var start = { line: 37, ch: 0 },
+                    middle = { line: 37, ch: 5 };
                 
                 testDoc.replaceRange("funD(", start, start);
                 testEditor.setCursorPos(middle);
-                var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 runs(function () {
-                    hintsPresentExact(hintObj, ["funD(a: string, b: number) -> {x, y}"]);
+                    expectParameterHint([{name: "a", type: "String"},
+                        {name: "b", type: "Number"}], 0);
                 });
             });
 
@@ -815,24 +892,22 @@ define(function (require, exports, module) {
                 runs(function () {
                     hintsPresentExact(hintObj, ["calc"]);
                 });
-                
             });
 
             it("should list function type defined from .prototype", function () {
                 var start = { line: 59, ch: 10 };
                 testEditor.setCursorPos(start);
-                var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 runs(function () {
-                    hintsPresentExact(hintObj, ["calc(a4: number, b4: number) -> number"]);
+                    expectParameterHint([{name: "a4", type: "Number"}, {name: "b4", type: "Number"}], 0);
                 });
             });
             
-            it("should list function inhertated from super class", function () {
+            it("should list function inherited from super class", function () {
                 var start = { line: 79, ch: 11 };
                 testEditor.setCursorPos(start);
                 var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 runs(function () {
-                    hintsPresentExact(hintObj, ["getAmountDue", "getName", "name", "setAmountDue"]);
+                    hintsPresentExact(hintObj, ["amountDue", "getAmountDue", "getName", "name", "setAmountDue"]);
                 });
             });
 
@@ -842,9 +917,8 @@ define(function (require, exports, module) {
                 
                 testDoc.replaceRange("myCustomer.setAmountDue(", start);
                 testEditor.setCursorPos(testPos);
-                var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 runs(function () {
-                    hintsPresentOrdered(hintObj, ["setAmountDue(amountDue: ?)"]);
+                    expectParameterHint([{name: "amountDue", type: "Object"}], 0);
                 });
             });
             
@@ -852,9 +926,8 @@ define(function (require, exports, module) {
                 var testPos = { line: 96, ch: 23 };
                 
                 testEditor.setCursorPos(testPos);
-                var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 runs(function () {
-                    hintsPresentOrdered(hintObj, ["innerFunc(arg: string) -> {t}"]);
+                    expectParameterHint([{name: "arg", type: "String"}], 0);
                 });
             });
             
@@ -864,12 +937,12 @@ define(function (require, exports, module) {
                 testEditor.setCursorPos(testPos);
                 var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 runs(function () {
-                    hintsPresentOrdered(hintObj, ["t() -> string"]);
+                    expectParameterHint([], 0);
                 });
                 
             });
             
-            // parameter type anotation tests, due to another bug #3670: first argument has ? 
+            // parameter type anotation tests, due to another bug #3670: first argument has ?
             xit("should list parameter Date,boolean type", function () {
                 var start = { line: 109, ch: 0 },
                     testPos = { line: 109, ch: 11 };
@@ -882,25 +955,23 @@ define(function (require, exports, module) {
                 });
             });
             
-            // parameter type anotation tests, due to another bug #3670: first argument has ? 
+            // parameter type anotation tests, due to another bug #3670: first argument has ?
             xit("should list parameter function type and best guess for its argument/return types", function () {
                 var testPos = { line: 123, ch: 11 };
                 
                 testEditor.setCursorPos(testPos);
-                var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 runs(function () {
-                    hintsPresentExact(hintObj, ["funFuncArg(f: fn() -> number) -> number"]);
+                    expectParameterHint([{name: "f", type: "function(): number"}], 0);
                 });
             });
 
-            // parameter type anotation tests
+            // parameter type annotation tests
             it("should list parameter function type and best guess for function call/return types", function () {
                 var testPos = { line: 139, ch: 12 };
                 
                 testEditor.setCursorPos(testPos);
-                var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 runs(function () {
-                    hintsPresentExact(hintObj, ["funFunc2Arg(f: fn(s: string, n: number) -> string)"]);
+                    expectParameterHint([{name: "f", type: "function(String, Number):String"}], 0);
                 });
             });
 
@@ -920,9 +991,8 @@ define(function (require, exports, module) {
                 
                 testDoc.replaceRange("funArr.index1(", start);
                 testEditor.setCursorPos(testPos);
-                var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 runs(function () {
-                    hintsPresentExact(hintObj, ["index1() -> number"]);
+                    expectParameterHint([], 0);
                 });
             });
 
@@ -991,6 +1061,7 @@ define(function (require, exports, module) {
                     editorJumped({line: 3, ch: 6});
                 });
             });
+            
             it("should jump to closure, early defined var", function () {
                 var start = { line: 17, ch: 9 };
                 
@@ -1061,7 +1132,7 @@ define(function (require, exports, module) {
                 
                 runs(function () {
                     testEditor.setCursorPos(func);
-                    expectNoHints(JSCodeHints.jsHintProvider);
+                    expectNoParameterHint();
                     testEditor.setCursorPos(param);
                     expectNoHints(JSCodeHints.jsHintProvider);
                     testEditor.setCursorPos(variable);
@@ -1113,9 +1184,97 @@ define(function (require, exports, module) {
                     testPos = { line: 80, ch: 24 };
                 testDoc.replaceRange("myCustomer.setAmountDue(10)", start);
                 testEditor.setCursorPos(testPos);
-                var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 runs(function () {
-                    hintsPresentOrdered(hintObj, ["setAmountDue(amountDue: number)"]);
+                    expectParameterHint([{name: "amountDue", type: "Number"}], 0);
+                });
+            });
+
+            it("should list parameter hint for record type annotation", function () {
+                var testPos = { line: 178, ch: 25 };
+
+                testEditor.setCursorPos(testPos);
+                runs(function () {
+                    expectParameterHint([{name: "t", type: "{index: Number, name: String}"}], -1);
+                });
+            });
+
+            it("should list parameter hint for optional parameters", function () {
+                var testPos = { line: 214, ch: 17 };
+
+                testEditor.setCursorPos(testPos);
+                runs(function () {
+                    expectParameterHint([{name: "a", type: "Number", isOptional: true}, {name: "b", type: "String", isOptional: true}], 0);
+                });
+            });
+
+            it("should list parameter hint for a function parameter", function () {
+                var testPos = { line: 181, ch: 12 };
+
+                testEditor.setCursorPos(testPos);
+                runs(function () {
+                    expectParameterHint([{name: "compare",
+                        type: "function(Object, Object):Number",
+                        isOptional: true}], -1);
+                });
+            });
+
+            it("should list parameter hint for an array parameter", function () {
+                var testPos = { line: 184, ch: 12 };
+                testEditor.setCursorPos(testPos);
+                runs(function () {
+                    expectParameterHint([{name: "other", type: "Array.<Object>"}], -1);
+                });
+            });
+
+            it("should list parameter hint for a source array annotation", function () {
+                var testPos = { line: 200, ch: 20 };
+                testEditor.setCursorPos(testPos);
+                runs(function () {
+                    expectParameterHint([{name: "a", type: "Array.<String>"}], 0);
+                });
+            });
+
+            it("should close parameter hint when move off function", function () {
+                var testPos = { line: 184, ch: 12 },
+                    endPos  = { line: 184, ch: 19 };
+                testEditor.setCursorPos(testPos);
+                runs(function () {
+                    expectParameterHint([{name: "other", type: "Array.<Object>"}], -1);
+                });
+
+                runs(function () {
+                    testEditor.setCursorPos(endPos);
+                    expectParameterHintClosed();
+                });
+            });
+
+            it("should close parameter hint when move off function to another function", function () {
+                var testPos = { line: 184, ch: 12 },
+                    newPos  = { line: 181, ch: 12 };
+                testEditor.setCursorPos(testPos);
+                runs(function () {
+                    expectParameterHint([{name: "other", type: "Array.<Object>"}], -1);
+                });
+
+                runs(function () {
+                    testEditor.setCursorPos(newPos);
+                    expectParameterHintClosed();
+                });
+            });
+
+            it("should update current parameter as the cursor moves", function () {
+                var testPos = { line: 186, ch: 19 },
+                    newPos  = { line: 186, ch: 20 };
+                testEditor.setCursorPos(testPos);
+                runs(function () {
+                    expectParameterHint([{name: "char", type: "String"},
+                        {name: "from", type: "Number", isOptional: true}], 0);
+                });
+
+                runs(function () {
+                    testEditor.setCursorPos(newPos);
+                    expectParameterHint([{name: "char", type: "String"},
+                        {name: "from", type: "Number", isOptional: true}], 1);
                 });
             });
 
@@ -1147,9 +1306,8 @@ define(function (require, exports, module) {
                 var start = { line: 36, ch: 12 };
                 
                 testEditor.setCursorPos(start);
-                var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 runs(function () {
-                    hintsPresentExact(hintObj, ["foo(a: number) -> string"]);
+                    expectParameterHint([{name: "a", type: "Number"}], 0);
                 });
             });
             
@@ -1157,9 +1315,8 @@ define(function (require, exports, module) {
                 var start = { line: 22, ch: 17 };
                 
                 testEditor.setCursorPos(start);
-                var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 runs(function () {
-                    hintsPresentExact(hintObj, ["funD(a: string, b: number) -> {x, y}"]);
+                    expectParameterHint([{name: "a", type: "String"}, {name: "b", type: "Number"}], 0);
                 });
             });
 
@@ -1167,9 +1324,8 @@ define(function (require, exports, module) {
                 var start = { line: 23, ch: 17 };
                 
                 testEditor.setCursorPos(start);
-                var hintObj = expectHints(JSCodeHints.jsHintProvider);
                 runs(function () {
-                    hintsPresentExact(hintObj, ["funE(paramE1: D1, paramE2: number)"]);
+                    expectParameterHint([{name: "paramE1", type: "D1"}, {name: "paramE2", type: "Number"}], 0);
                 });
             });
 
@@ -1284,7 +1440,9 @@ define(function (require, exports, module) {
                     hintsPresentExact(hintObj, ["addMessage", "name", "privilegedMethod", "publicMethod1"]);
                 });
             });
-            it("should read methods created in submodule", function () {
+            
+            // bug: wait for fix in tern
+            xit("should read methods created in submodule", function () {
                 var start = { line: 19, ch: 15 };
 
                 runs(function () {
@@ -1305,7 +1463,8 @@ define(function (require, exports, module) {
                     hintsPresentExact(hintObj, ["addMessage", "name", "privilegedMethod", "publicMethod1"]);
                 });
             });
-            // bug: wait for tern 
+
+            // bug: wait for tern
             xit("should read methods created in submodule module", function () {
                 var start        = { line: 62, ch: 0 },
                     testPos          = { line: 62, ch: 13};
@@ -1337,6 +1496,7 @@ define(function (require, exports, module) {
                     hintsPresentExact(hintObj, ["color", "material", "size"]);
                 });
             });
+
             // tern bug: https://github.com/marijnh/tern/issues/147
             xit("should read properties from exported module", function () {
                 var start        = { line: 96, ch: 0 },
@@ -1350,7 +1510,7 @@ define(function (require, exports, module) {
                 });
             });
             
-            // bug in test framework? can't run sequencial jump, verification is wrong 
+            // bug in test framework? can't run sequential jump, verification is wrong
             xit("should jump to a module, depending module", function () {
                 var start        = { line: 93, ch: 25 },
                     testPos      = { line: 8, ch: 35 };
@@ -1373,23 +1533,24 @@ define(function (require, exports, module) {
             function getPreferences(path) {
                 preferences = null;
 
-                NativeFileSystem.resolveNativeFileSystemPath(path, function (fileEntry) {
-                    FileUtils.readAsText(fileEntry).done(function (text) {
-                        var configObj = null;
-                        try {
-                            configObj = JSON.parse(text);
-                        } catch (e) {
-                            // continue with null configObj
-                            console.log(e);
-                        }
-                        preferences = new Preferences(configObj);
-                    }).fail(function (error) {
+                FileSystem.resolve(path, function (err, file) {
+                    if (!err) {
+                        FileUtils.readAsText(file).done(function (text) {
+                            var configObj = null;
+                            try {
+                                configObj = JSON.parse(text);
+                            } catch (e) {
+                                // continue with null configObj
+                                console.log(e);
+                            }
+                            preferences = new Preferences(configObj);
+                        }).fail(function (error) {
+                            preferences = new Preferences();
+                        });
+                    } else {
                         preferences = new Preferences();
-                    });
-                }, function (error) {
-                    preferences = new Preferences();
+                    }
                 });
-
             }
 
             // Test preferences file with no entries. Preferences should contain
@@ -1483,9 +1644,7 @@ define(function (require, exports, module) {
         
         describe("regression tests", function () {
 
-            // Test maybe valid javascript identifier
-            // FIXME (issue #3558)
-            xit("should return true for valid identifier, false for invalid one", function () {
+            it("should return true for valid identifier, false for invalid one", function () {
                 var identifierList = ["ᾩ", "ĦĔĽĻŎ", "〱〱〱〱", "जावास्क्रि",
                                       "KingGeorgeⅦ", "π", "ಠ_ಠ",
                                       "price_9̶9̶_89", "$_3423", "TRUE", "FALSE", "IV"];
@@ -1568,7 +1727,6 @@ define(function (require, exports, module) {
                 tearDownTest();
             });
 
-            // Test maybe valid javascript identifier
             // FIXME (issue #3558)
             xit("should return true for valid identifier, false for invalid one", function () {
                 var identifierList = ["ᾩ", "ĦĔĽĻŎ", "〱〱〱〱", "जावास्क्रि",
@@ -1599,6 +1757,7 @@ define(function (require, exports, module) {
                 tearDownTest();
                 
             });
+            
             // FIXME (issue #3915)
             xit("should read function name has double byte chars", function () {
                 var start   = { line: 15, ch: 8 },
@@ -1624,6 +1783,7 @@ define(function (require, exports, module) {
                     editorJumped({line: 12, ch: 20});
                 });
             });
+            
             // FIXME (issue #3915)
             xit("should read function name has non ascii chars", function () {
                 var start = { line: 16, ch: 16 };
@@ -1645,5 +1805,61 @@ define(function (require, exports, module) {
             });
 
         });
+
+        describe("JavaScript Code Hinting format parameters tests", function () {
+
+            it("should format parameters with no params", function () {
+                var params = [];
+
+                expect(HintUtils2.formatParameterHint(params)).toBe("");
+            });
+
+            it("should format parameters with one param", function () {
+                var params = [{name: "param1", type: "String"}];
+
+                expect(HintUtils2.formatParameterHint(params)).toBe("String param1");
+            });
+
+            it("should format parameters with one optional param", function () {
+                var params = [{name: "param1", type: "String", isOptional: true}];
+
+                expect(HintUtils2.formatParameterHint(params)).toBe("[String param1]");
+            });
+
+            it("should format parameters with one required, one optional param", function () {
+                var params = [{name: "param1", type: "String"},
+                              {name: "param2", type: "String", isOptional: true}];
+
+                expect(HintUtils2.formatParameterHint(params)).toBe("String param1, [String param2]");
+            });
+
+            it("should format parameters with required param following an optional param", function () {
+                var params = [{name: "param1", type: "String"},
+                    {name: "param2", type: "String", isOptional: true},
+                    {name: "param3", type: "String"}];
+
+                expect(HintUtils2.formatParameterHint(params)).toBe("String param1, [String param2, String param3]");
+            });
+
+            it("should format parameters with optional param following an optional param", function () {
+                var params = [{name: "param1", type: "String"},
+                    {name: "param2", type: "String", isOptional: true},
+                    {name: "param3", type: "String", isOptional: true}];
+
+                expect(HintUtils2.formatParameterHint(params)).toBe("String param1, [String param2], [String param3]");
+            });
+
+            it("should format parameters with optional param following optional and required params", function () {
+                var params = [{name: "param1", type: "String"},
+                    {name: "param2", type: "String", isOptional: true},
+                    {name: "param3", type: "String"},
+                    {name: "param4", type: "String", isOptional: true}];
+
+                expect(HintUtils2.formatParameterHint(params)).toBe("String param1, [String param2, String param3], [String param4]");
+            });
+
+        });
+
+
     });
 });
